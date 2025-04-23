@@ -26,6 +26,8 @@
    This code is the rewrite of afl-as.h's main_payload.
 */
 
+#include "kofta-llvm-rt.o.h"
+
 #include "../android-ashmem.h"
 #include "../config.h"
 #include "../types.h"
@@ -113,6 +115,8 @@ static void __afl_start_forkserver(void) {
   if (write(FORKSRV_FD + 1, tmp, 4) != 4) return;
 
   while (1) {
+
+    __kofta_module_cov_reset();
 
     u32 was_killed;
     int status;
@@ -260,6 +264,7 @@ __attribute__((constructor(CONST_PRIO))) void __afl_auto_init(void) {
 
   if (getenv(DEFER_ENV_VAR)) return;
 
+  __kofta_manual_init();
   __afl_manual_init();
 
 }

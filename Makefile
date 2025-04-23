@@ -24,13 +24,17 @@ MISC_PATH   = $(PREFIX)/share/afl
 
 # PROGS intentionally omit afl-as, which gets installed elsewhere.
 
-PROGS       = afl-gcc afl-fuzz afl-showmap afl-tmin afl-gotcpu afl-analyze
+PROGS       = afl-gcc kofta-fuzz afl-showmap afl-tmin afl-gotcpu afl-analyze
 SH_PROGS    = afl-plot afl-cmin afl-whatsup
 
 CFLAGS     ?= -O3 -funroll-loops
 CFLAGS     += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
 	      -DAFL_PATH=\"$(HELPER_PATH)\" -DDOC_PATH=\"$(DOC_PATH)\" \
 	      -DBIN_PATH=\"$(BIN_PATH)\"
+
+ifdef KOFTA_DEBUG
+  CFLAGS   += -DKOFTA_DEBUG
+endif
 
 ifneq "$(filter Linux GNU%,$(shell uname))" ""
   LDFLAGS  += -ldl
@@ -69,8 +73,8 @@ afl-as: afl-as.c afl-as.h $(COMM_HDR) | test_x86
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
 	ln -sf afl-as as
 
-afl-fuzz: afl-fuzz.c $(COMM_HDR) | test_x86
-	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
+kofta-fuzz: afl-fuzz.c $(COMM_HDR) | test_x86
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
 
 afl-showmap: afl-showmap.c $(COMM_HDR) | test_x86
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)

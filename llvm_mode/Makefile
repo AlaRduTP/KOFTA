@@ -56,7 +56,7 @@ ifeq "$(origin CC)" "default"
 endif
 
 ifndef AFL_TRACE_PC
-  PROGS      = ../afl-clang-fast ../afl-llvm-pass.so ../afl-llvm-rt.o ../afl-llvm-rt-32.o ../afl-llvm-rt-64.o
+  PROGS      = ../afl-clang-fast ../afl-llvm-pass.so ../kofta-llvm-pass.so ../afl-llvm-rt.o ../kofta-llvm-rt.o ../afl-llvm-rt-32.o ../afl-llvm-rt-64.o
 else
   PROGS      = ../afl-clang-fast ../afl-llvm-rt.o ../afl-llvm-rt-32.o ../afl-llvm-rt-64.o
 endif
@@ -83,7 +83,13 @@ endif
 ../afl-llvm-pass.so: afl-llvm-pass.so.cc | test_deps
 	$(CXX) $(CLANG_CFL) -shared $< -o $@ $(CLANG_LFL)
 
+../kofta-llvm-pass.so: kofta-llvm-pass.so.cc | test_deps
+	$(CXX) $(CLANG_CFL) -shared $< -o $@ $(CLANG_LFL)
+
 ../afl-llvm-rt.o: afl-llvm-rt.o.c | test_deps
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+
+../kofta-llvm-rt.o: kofta-llvm-rt.o.c | test_deps
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 ../afl-llvm-rt-32.o: afl-llvm-rt.o.c | test_deps
@@ -96,7 +102,7 @@ endif
 
 test_build: $(PROGS)
 	@echo "[*] Testing the CC wrapper and instrumentation output..."
-	unset AFL_USE_ASAN AFL_USE_MSAN AFL_INST_RATIO; AFL_QUIET=1 AFL_PATH=. AFL_CC=$(CC) ../afl-clang-fast $(CFLAGS) ../test-instr.c -o test-instr $(LDFLAGS)
+	unset AFL_USE_ASAN AFL_USE_MSAN AFL_INST_RATIO; KOFTA_SKIP=1 AFL_QUIET=1 AFL_PATH=. AFL_CC=$(CC) ../afl-clang-fast $(CFLAGS) ../test-instr.c -o test-instr $(LDFLAGS)
 # Use /dev/null to avoid problems with optimization messing up expected
 # branches. See https://github.com/google/AFL/issues/30.
 	../afl-showmap -m none -q -o .test-instr0 ./test-instr < /dev/null

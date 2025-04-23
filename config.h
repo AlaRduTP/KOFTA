@@ -30,6 +30,14 @@
 
 #define VERSION             "2.57b"
 
+/*******************
+ *                 *
+ *  KOFTA stuffs:  *
+ *                 *
+ *******************/
+
+#define KOFTA_VERSION      "0.10"
+
 /******************************************************
  *                                                    *
  *  Settings that may be of interest to power users:  *
@@ -277,6 +285,7 @@
 /* Environment variable used to pass SHM ID to the called program. */
 
 #define SHM_ENV_VAR         "__AFL_SHM_ID"
+#define KOFTA_SHM_ENV_VAR   "__KOFTA_SHM_ID"
 
 /* Other less interesting, internal-only variables. */
 

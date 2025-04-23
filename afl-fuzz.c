@@ -43,6 +43,9 @@
 #include "alloc-inl.h"
 #include "hash.h"
 
+#include "llvm_mode/kofta-llvm-rt.o.h"
+
+#include <stdarg.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -265,6 +268,9 @@ struct queue_entry {
   struct queue_entry *next,           /* Next element, if any             */
                      *next_100;       /* 100 elements ahead               */
 
+  u32 mcov_hits;                      /* Number of unique modules hit     */
+  u8  mcov_depth;                     /* Depth of the module stack        */
+
 };
 
 static struct queue_entry *queue,     /* Fuzzing queue (linked list)      */
@@ -294,6 +300,21 @@ static u8* (*post_handler)(u8* buf, u32* len);
 static s8  interesting_8[]  = { INTERESTING_8 };
 static s16 interesting_16[] = { INTERESTING_8, INTERESTING_16 };
 static s32 interesting_32[] = { INTERESTING_8, INTERESTING_16, INTERESTING_32 };
+
+/* KOFTA stuffs */
+
+static s32 kofta_shm_id;
+
+static struct kofta_shm* kofta_shm;
+static struct kofta_mcov* kofta_mcov;
+
+#ifdef KOFTA_DEBUG
+
+#define KOFTA_DEBUG_FILE "KOFTA_DEBUG"
+
+static s32 kofta_debug_fd;
+
+#endif
 
 /* Fuzzing stages */
 
@@ -336,6 +357,30 @@ enum {
   /* 05 */ FAULT_NOBITS
 };
 
+#ifdef KOFTA_DEBUG
+
+static void close_kofta_debug(void) {
+
+  close(kofta_debug_fd);
+
+}
+
+static void init_kofta_debug(void) {
+
+  kofta_debug_fd = open(KOFTA_DEBUG_FILE, O_WRONLY | O_CREAT | O_APPEND, 0600);
+  if (kofta_debug_fd == -1)
+    PFATAL("Unable to create KOFTA debug file");
+
+  atexit(close_kofta_debug);
+
+}
+
+#define kofta_debug(fmt, x...) do { \
+  if (kofta_debug_fd == -1) init_kofta_debug(); \
+  dprintf(kofta_debug_fd, fmt, x); \
+} while (0)
+
+#endif
 
 /* Get unix time in milliseconds */
 
@@ -1265,44 +1310,51 @@ static void minimize_bits(u8* dst, u8* src) {
 static void update_bitmap_score(struct queue_entry* q) {
 
   u32 i;
+  u64 fav_mcov   = q->mcov_depth * q->mcov_hits;
   u64 fav_factor = q->exec_us * q->len;
 
   /* For every byte set in trace_bits[], see if there is a previous winner,
      and how it compares to us. */
 
-  for (i = 0; i < MAP_SIZE; i++)
+  for (i = 0; i < MAP_SIZE; i++) {
 
     if (trace_bits[i]) {
 
-       if (top_rated[i]) {
+      if (top_rated[i]) {
 
-         /* Faster-executing or smaller test cases are favored. */
+        /* Wider module-exploring test cases are favored. */
 
-         if (fav_factor > top_rated[i]->exec_us * top_rated[i]->len) continue;
+        if (fav_mcov < top_rated[i]->mcov_depth * top_rated[i]->mcov_hits) continue;
 
-         /* Looks like we're going to win. Decrease ref count for the
-            previous winner, discard its trace_bits[] if necessary. */
+        /* Faster-executing or smaller test cases are favored. */
 
-         if (!--top_rated[i]->tc_ref) {
-           ck_free(top_rated[i]->trace_mini);
-           top_rated[i]->trace_mini = 0;
-         }
+        if (fav_factor > top_rated[i]->exec_us * top_rated[i]->len) continue;
 
-       }
+        /* Looks like we're going to win. Decrease ref count for the
+          previous winner, discard its trace_bits[] if necessary. */
 
-       /* Insert ourselves as the new winner. */
+        if (!--top_rated[i]->tc_ref) {
+          ck_free(top_rated[i]->trace_mini);
+          top_rated[i]->trace_mini = 0;
+        }
 
-       top_rated[i] = q;
-       q->tc_ref++;
+      }
 
-       if (!q->trace_mini) {
-         q->trace_mini = ck_alloc(MAP_SIZE >> 3);
-         minimize_bits(q->trace_mini, trace_bits);
-       }
+      /* Insert ourselves as the new winner. */
 
-       score_changed = 1;
+      top_rated[i] = q;
+      q->tc_ref++;
 
-     }
+      if (!q->trace_mini) {
+        q->trace_mini = ck_alloc(MAP_SIZE >> 3);
+        minimize_bits(q->trace_mini, trace_bits);
+      }
+
+      score_changed = 1;
+
+    }
+
+  }
 
 }
 
@@ -2150,6 +2202,7 @@ EXP_ST void init_forkserver(char** argv) {
      Otherwise, try to figure out what went wrong. */
 
   if (rlen == 4) {
+    if (kofta_mcov->trace_bits[0] != 'K') FATAL("Unable to setup KOFTA SHM in the fork server.");
     OKF("All right - fork server is up.");
     return;
   }
@@ -2283,6 +2336,56 @@ EXP_ST void init_forkserver(char** argv) {
 
 }
 
+/* KOFTA SHM Setup */
+
+static void remove_kofta_shm(void) {
+
+  shmctl(kofta_shm_id, IPC_RMID, NULL);
+
+}
+
+static void setup_kofta_shm(void) {
+
+  u8* shm_str;
+
+  kofta_shm_id = shmget(IPC_PRIVATE, sizeof(struct kofta_shm), IPC_CREAT | IPC_EXCL | 0600);
+
+  if (kofta_shm_id < 0) PFATAL("shmget() failed");
+
+  atexit(remove_kofta_shm);
+
+  shm_str = alloc_printf("%d", kofta_shm_id);
+
+  setenv(KOFTA_SHM_ENV_VAR, shm_str, 1);
+
+  ck_free(shm_str);
+
+  kofta_shm = shmat(kofta_shm_id, NULL, 0);
+  if (kofta_shm == (void *)-1) PFATAL("shmat() failed");
+
+  kofta_mcov = &kofta_shm->module_cov;
+  kofta_mcov->trace_bits[0] = 78;
+
+}
+
+/* Calculate max module depth in the latest run. */
+
+static u8 kofta_mcov_depth(void) {
+
+  u32 i;
+  u8  max_depth = 0;
+
+  for (i = 0; i < MAP_SIZE; i++) {
+
+    if (kofta_mcov->trace_bits[i] > max_depth) {
+      max_depth = kofta_mcov->trace_bits[i];
+    }
+
+  }
+
+  return max_depth;
+
+}
 
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update trace_bits[]. */
@@ -2303,6 +2406,9 @@ static u8 run_target(char** argv, u32 timeout) {
      territory. */
 
   memset(trace_bits, 0, MAP_SIZE);
+  MEM_BARRIER();
+
+  memset(kofta_mcov, 0, sizeof(struct kofta_mcov));
   MEM_BARRIER();
 
   /* If we're running in "dumb" mode, we can't rely on the fork server
@@ -2678,6 +2784,9 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   q->bitmap_size = count_bytes(trace_bits);
   q->handicap    = handicap;
   q->cal_failed  = 0;
+
+  q->mcov_depth  = kofta_mcov_depth();
+  q->mcov_hits   = kofta_mcov->unique_hits;
 
   total_bitmap_size += q->bitmap_size;
   total_bitmap_entries++;
@@ -3167,6 +3276,8 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
   s32 fd;
   u8  keeping = 0, res;
 
+  /* In crash mode, keep only if the testcase crashed.
+     In non-crash mode, keep only if the testcase does not crash. */
   if (fault == crash_mode) {
 
     /* Keep only if there are new bits in the map, add to queue for
@@ -4051,13 +4162,13 @@ static void show_stats(void) {
 
   /* Let's start by drawing a centered banner. */
 
-  banner_len = (crash_mode ? 24 : 22) + strlen(VERSION) + strlen(use_banner);
+  banner_len = (crash_mode ? 24 : 9) + strlen(KOFTA_VERSION) + strlen(use_banner);
   banner_pad = (80 - banner_len) / 2;
   memset(tmp, ' ', banner_pad);
 
-  sprintf(tmp + banner_pad, "%s " cLCY VERSION cLGN
+  sprintf(tmp + banner_pad, "%s " cLCY KOFTA_VERSION cLGN
           " (%s)",  crash_mode ? cPIN "peruvian were-rabbit" : 
-          cYEL "american fuzzy lop", use_banner);
+          cYEL "KOFTA", use_banner);
 
   SAYF("\n%s\n\n", tmp);
 
@@ -4683,6 +4794,14 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
      return 1;
 
   }
+
+#ifdef KOFTA_DEBUG
+
+  kofta_debug("%u, %u\n",
+              kofta_mcov_depth(),
+              kofta_mcov->unique_hits);
+
+#endif
 
   /* This handles FAULT_ERROR for us: */
 
@@ -7949,12 +8068,14 @@ int main(int argc, char** argv) {
 
       case 'C': /* crash mode */
 
+        FATAL("Crash mode is deprecated.");
         if (crash_mode) FATAL("Multiple -C options not supported");
         crash_mode = FAULT_CRASH;
         break;
 
       case 'n': /* dumb mode */
 
+        FATAL("Dumb mode is deprecated.");
         if (dumb_mode) FATAL("Multiple -n options not supported");
         if (getenv("AFL_DUMB_FORKSRV")) dumb_mode = 2; else dumb_mode = 1;
 
@@ -7968,6 +8089,7 @@ int main(int argc, char** argv) {
 
       case 'Q': /* QEMU mode */
 
+        FATAL("QEMU mode is deprecated.");
         if (qemu_mode) FATAL("Multiple -Q options not supported");
         qemu_mode = 1;
 
@@ -7985,6 +8107,10 @@ int main(int argc, char** argv) {
         usage(argv[0]);
 
     }
+
+  /* Enable -d option by default. */
+  skip_deterministic = 1;
+  use_splicing = 1;
 
   if (optind == argc || !in_dir || !out_dir) usage(argv[0]);
 
@@ -8044,6 +8170,11 @@ int main(int argc, char** argv) {
   setup_shm();
   init_count_class16();
 
+#ifdef KOFTA_DEBUG
+  init_kofta_debug();
+#endif
+  setup_kofta_shm();
+
   setup_dirs_fds();
   read_testcases();
   load_auto();
@@ -8094,6 +8225,8 @@ int main(int argc, char** argv) {
 
     cull_queue();
 
+    /* On the first cycle, or when we reached the last entry,
+       reset queue_cur to the first entry of the queue */
     if (!queue_cur) {
 
       queue_cycle++;

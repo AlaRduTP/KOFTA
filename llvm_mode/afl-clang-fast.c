@@ -139,6 +139,13 @@ static void edit_params(u32 argc, char** argv) {
   cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-pass.so", obj_path);
 #endif /* ^USE_TRACE_PC */
 
+  if (!getenv("KOFTA_SKIP")) {
+    cc_params[cc_par_cnt++] = "-Xclang";
+    cc_params[cc_par_cnt++] = "-load";
+    cc_params[cc_par_cnt++] = "-Xclang";
+    cc_params[cc_par_cnt++] = alloc_printf("%s/kofta-llvm-pass.so", obj_path);
+  }
+
   cc_params[cc_par_cnt++] = "-Qunused-arguments";
 
   while (--argc) {
@@ -284,11 +291,8 @@ static void edit_params(u32 argc, char** argv) {
       cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt.o", obj_path);
       break;
 
-    case 32:
-      cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-rt-32.o", obj_path);
-
-      if (access(cc_params[cc_par_cnt - 1], R_OK))
-        FATAL("-m32 is not supported by your compiler");
+    case 32: /* KOFTA doesn't support 32-bit systems. */
+      FATAL("-m32 is not supported by your compiler");
 
       break;
 
@@ -303,6 +307,7 @@ static void edit_params(u32 argc, char** argv) {
   }
 #endif
 
+  cc_params[cc_par_cnt++] = alloc_printf("%s/kofta-llvm-rt.o", obj_path);
   cc_params[cc_par_cnt] = NULL;
 
 }
