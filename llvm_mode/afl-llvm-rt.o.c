@@ -138,6 +138,7 @@ static void __afl_start_forkserver(void) {
 
       /* Once woken up, create a clone of our process. */
 
+      __kofta_update_opts();
       child_pid = fork();
       if (child_pid < 0) _exit(1);
 
@@ -258,7 +259,7 @@ void __afl_manual_init(void) {
 
 /* Proper initialization routine. */
 
-__attribute__((constructor(CONST_PRIO))) void __afl_auto_init(void) {
+__attribute__((constructor(KOFTA_FORKSRV_PRIO))) void __afl_auto_init(void) {
 
   is_persistent = !!getenv(PERSIST_ENV_VAR);
 

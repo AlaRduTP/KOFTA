@@ -270,6 +270,8 @@ struct queue_entry {
   u32 mcov_hits;                      /* Number of unique modules hit     */
   u8  mcov_depth;                     /* Depth of the module stack        */
 
+  u8* alname;                         /* Name of the arglist file         */
+
 };
 
 static struct queue_entry *queue,     /* Fuzzing queue (linked list)      */
@@ -306,6 +308,12 @@ static s32 kofta_shm_id;
 
 static struct kofta_shm* kofta_shm;
 static struct kofta_mcov* kofta_mcov;
+static struct kofta_args* kofta_args;
+
+static arglist* kofta_arglist;
+static arglist* kofta_optlist;
+
+static u32 kofta_arglist_size;
 
 #ifdef KOFTA_DEBUG
 
@@ -846,7 +854,7 @@ static void mark_as_redundant(struct queue_entry* q, u8 state) {
 
 /* Append new test case to the queue. */
 
-static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
+static void add_to_queue(u8* fname, u32 len, u8 passed_det, u8* alname) {
 
   struct queue_entry* q = ck_alloc(sizeof(struct queue_entry));
 
@@ -854,6 +862,8 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
   q->len          = len;
   q->depth        = cur_depth + 1;
   q->passed_det   = passed_det;
+
+  q->alname       = alname;
 
   if (q->depth > max_depth) max_depth = q->depth;
 
@@ -893,6 +903,7 @@ EXP_ST void destroy_queue(void) {
     n = q->next;
     ck_free(q->fname);
     ck_free(q->trace_mini);
+    ck_free(q->alname);
     ck_free(q);
     q = n;
 
@@ -1557,7 +1568,7 @@ static void read_testcases(void) {
     if (!access(dfn, F_OK)) passed_det = 1;
     ck_free(dfn);
 
-    add_to_queue(fn, st.st_size, passed_det);
+    add_to_queue(fn, st.st_size, passed_det, "");
 
   }
 
@@ -2363,6 +2374,109 @@ static void setup_kofta_shm(void) {
   kofta_mcov = &kofta_shm->module_cov;
   kofta_mcov->trace_bits[0] = 78;
 
+  kofta_args = &kofta_shm->args;
+
+}
+
+/* KOFTA Args Setup */
+
+static void update_kofta_opts(u32 optcnt) {
+
+  kofta_args->optcnt = optcnt;
+  kofta_args->changed = 1;
+
+}
+
+static void remove_kofta_args(void) {
+
+  if (kofta_arglist) {
+    munmap(kofta_arglist, KOFTA_ARGV_SIZE * (kofta_args->argcnt + KOFTA_OPTCNT_MAX));
+    kofta_arglist = NULL;
+  }
+
+  if (kofta_args->memfd > 0) {
+    close(kofta_args->memfd);
+    kofta_args->memfd = -1;
+  }
+
+}
+
+static void setup_kofta_args(u32 argc, char** argv) {
+
+  kofta_args->argcnt = argc;
+  argc += KOFTA_OPTCNT_MAX;
+
+  kofta_arglist_size = KOFTA_ARGV_SIZE * argc;
+
+  kofta_args->memfd = memfd_create("kofta", 0);
+  if (kofta_args->memfd < 0) PFATAL("memfd_create() failed");
+
+  if(ftruncate(kofta_args->memfd, kofta_arglist_size) < 0) {
+    PFATAL("ftruncate() failed");
+  }
+  kofta_arglist = mmap(NULL, kofta_arglist_size, PROT_READ | PROT_WRITE,
+                       MAP_SHARED, kofta_args->memfd, 0);
+  if (kofta_arglist == MAP_FAILED) PFATAL("mmap() failed");
+
+  atexit(remove_kofta_args);
+
+  for (u32 i = 0; i < kofta_args->argcnt; i++) {
+    strncpy(kofta_arglist[i], argv[i], KOFTA_ARGV_SIZE);
+    if (kofta_arglist[i][KOFTA_ARGV_SIZE - 1] != '\0') {
+      FATAL("argv[%d] is too long: %s", i, argv[i]);
+    }
+  }
+
+  kofta_optlist = &kofta_arglist[kofta_args->argcnt];
+  for (u32 i = 0; i < KOFTA_OPTCNT_MAX; i++) {
+    strncpy(kofta_optlist[i], "--l3e7", KOFTA_ARGV_SIZE);
+  }
+
+  char** use_argv = ck_alloc(sizeof(u8*) * (argc + 1));
+  use_argv[0] = kofta_arglist[0];
+  for (u32 i = 0; i < KOFTA_OPTCNT_MAX; i++) {
+    use_argv[i + 1] = kofta_optlist[i];
+  }
+  for (u32 i = 1; i < kofta_args->argcnt; i++) {
+    use_argv[i + KOFTA_OPTCNT_MAX] = kofta_arglist[i];
+  }
+  use_argv[argc] = NULL;
+
+  update_kofta_opts(0);
+  init_forkserver(use_argv);
+
+  ck_free(use_argv);
+
+}
+
+static void kofta_read_arglist(u8* alname) {
+
+  s32 fd = open(alname, O_RDONLY);
+  if (fd < 0) PFATAL("Unable to open '%s'", alname);
+
+  u8* altemp = mmap(0, kofta_arglist_size + 2, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+  if (altemp == MAP_FAILED) PFATAL("Unable to mmap '%s'", queue_cur->alname);
+
+  close(fd);
+
+  memcpy(kofta_arglist, altemp + 2, kofta_arglist_size);
+
+  kofta_args->argcnt = altemp[0];
+  kofta_args->optcnt = altemp[1];
+
+  munmap(altemp, kofta_arglist_size);
+
+}
+
+static void kofta_write_arglist(u8* alname) {
+
+  s32 fd = open(alname, O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (fd < 0) PFATAL("Unable to create '%s'", alname);
+  ck_write(fd, &kofta_args->argcnt, 1, alname);
+  ck_write(fd, &kofta_args->optcnt, 1, alname);
+  ck_write(fd, kofta_arglist, kofta_arglist_size, alname);
+  close(fd);
+
 }
 
 /* Calculate max module depth in the latest run. */
@@ -3103,6 +3217,29 @@ static void link_or_copy(u8* old_path, u8* new_path) {
 
 static void nuke_resume_dir(void);
 
+/* Create arglist file for input test cases in the output directory. Should
+   be called after pivot_inputs() and setup_kofta_args(). */
+
+static void kofta_pivot_args(void) {
+
+  struct queue_entry* q = queue;
+
+  ACTF("Creating arglist for all input files...");
+
+  while (q) {
+
+    u8 *alname, *rsl = strrchr(q->fname, '/') + 1;
+    alname = alloc_printf("%s/arglist/queue/%s", out_dir, rsl);
+
+    kofta_write_arglist(alname);
+
+    q->alname = alname;
+    q = q->next;
+
+  }
+
+}
+
 /* Create hard links for input test cases in the output directory, choosing
    good names and pivoting accordingly. */
 
@@ -3292,7 +3429,7 @@ static void write_crash_readme(void) {
 
 static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
-  u8  *fn = "";
+  u8  *fn = "", *an = "";
   u8  hnb;
   s32 fd;
   u8  keeping = 0, res;
@@ -3314,13 +3451,16 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
     fn = alloc_printf("%s/queue/id:%06u,ts:%llu,%s", out_dir, queued_paths,
                       get_cur_time(), describe_op(hnb));
 
+    an = alloc_printf("%s/arglist/queue/id:%06u,ts:%llu,%s", out_dir,
+                      queued_paths, get_cur_time(), describe_op(hnb));
+
 #else
 
     fn = alloc_printf("%s/queue/id_%06u", out_dir, queued_paths);
 
 #endif /* ^!SIMPLE_FILES */
 
-    add_to_queue(fn, len, 0);
+    add_to_queue(fn, len, 0, an);
 
     if (hnb == 2) {
       queue_top->has_new_cov = 1;
@@ -3341,6 +3481,8 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
     if (fd < 0) PFATAL("Unable to create '%s'", fn);
     ck_write(fd, mem, len, fn);
     close(fd);
+
+    kofta_write_arglist(an);
 
     keeping = 1;
 
@@ -3398,6 +3540,9 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
       fn = alloc_printf("%s/hangs/id:%06llu,%s", out_dir,
                         unique_hangs, describe_op(0));
 
+      an = alloc_printf("%s/arglist/hangs/id:%06llu,%s", out_dir,
+                        unique_hangs, describe_op(0));
+
 #else
 
       fn = alloc_printf("%s/hangs/id_%06llu", out_dir,
@@ -3442,6 +3587,9 @@ keep_as_crash:
       fn = alloc_printf("%s/crashes/id:%06llu,sig:%02u,%s", out_dir,
                         unique_crashes, kill_signal, describe_op(0));
 
+      an = alloc_printf("%s/arglist/crashes/id:%06llu,sig:%02u,%s", out_dir,
+                        unique_crashes, kill_signal, describe_op(0));
+
 #else
 
       fn = alloc_printf("%s/crashes/id_%06llu_%02u", out_dir, unique_crashes,
@@ -3471,6 +3619,10 @@ keep_as_crash:
   close(fd);
 
   ck_free(fn);
+
+  kofta_write_arglist(an);
+
+  ck_free(an);
 
   return keeping;
 
@@ -5188,6 +5340,10 @@ static u8 fuzz_one(char** argv) {
     fflush(stdout);
   }
 
+  /* Map the arglist into memory. */
+
+  kofta_read_arglist(queue_cur->alname);
+
   /* Map the test case into memory. */
 
   fd = open(queue_cur->fname, O_RDONLY);
@@ -5273,6 +5429,18 @@ static u8 fuzz_one(char** argv) {
    *********************/
 
   orig_perf = perf_score = calculate_score(queue_cur);
+
+  /* Simple options fuzzing. */
+
+  stage_short = "optinc";
+  stage_max   = 1337 * 2;
+  stage_name  = "option increment";
+
+  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+    sprintf(kofta_optlist[0], "%d", stage_cur);
+    update_kofta_opts(1);
+    if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+  }
 
   /* Skip right away if -d is given, if we have done deterministic fuzzing on
      this entry ourselves (was_fuzzed), or if it has gone through deterministic
@@ -7321,6 +7489,14 @@ EXP_ST void setup_dirs_fds(void) {
   if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
   ck_free(tmp);
 
+  tmp = alloc_printf("%s/arglist", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+
+  tmp = alloc_printf("%s/arglist/queue", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+
   /* Top-level directory for queue metadata used for session
      resume and related tasks. */
 
@@ -7372,9 +7548,17 @@ EXP_ST void setup_dirs_fds(void) {
   if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
   ck_free(tmp);
 
+  tmp = alloc_printf("%s/arglist/crashes", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+
   /* All recorded hangs. */
 
   tmp = alloc_printf("%s/hangs", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+
+  tmp = alloc_printf("%s/arglist/hangs", out_dir);
   if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
   ck_free(tmp);
 
@@ -8210,6 +8394,9 @@ int main(int argc, char** argv) {
     use_argv = get_qemu_argv(argv[0], argv + optind, argc - optind);
   else
     use_argv = argv + optind;
+
+  setup_kofta_args(argc - optind, use_argv);
+  kofta_pivot_args();
 
   perform_dry_run(use_argv);
 

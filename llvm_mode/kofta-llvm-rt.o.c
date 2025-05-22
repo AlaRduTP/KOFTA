@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include "kofta-llvm-rt.o.h"
 
 #include "../config.h"
@@ -9,6 +11,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#include <sys/mman.h>
 #include <sys/shm.h>
 
 #define MAX_MODULE_DEPTH 255
@@ -18,6 +21,13 @@ static u16 module_stack[MAX_MODULE_DEPTH + 1][2];
 
 static struct kofta_shm* kofta_shm;
 static struct kofta_mcov* kofta_mcov;
+static struct kofta_args* kofta_args;
+
+static int* __argc_ptr;
+static char*** __argv_ptr;
+
+static arglist* kofta_arglist;
+static u64 kofta_arglist_size;
 
 static void __kofta_map_shm(void) {
   
@@ -32,8 +42,17 @@ static void __kofta_map_shm(void) {
     kofta_mcov = &kofta_shm->module_cov;
     kofta_mcov->trace_bits[0] = 'K';
 
+    kofta_args = &kofta_shm->args;
+
   }
   else do { /* No fuzzer is running. */ } while(0);
+
+}
+
+static void __kofta_init_args(void) {
+
+  kofta_arglist_size = KOFTA_ARGV_SIZE * (kofta_args->argcnt + KOFTA_OPTCNT_MAX);
+  kofta_arglist = mmap(NULL, kofta_arglist_size, PROT_NONE, MAP_NORESERVE | MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 
 }
 
@@ -41,8 +60,10 @@ void __kofta_manual_init(void) {
 
   static u8 init_done;
   if (!init_done) {
-    __kofta_map_shm();
     init_done = 1;
+    __kofta_map_shm();
+    if (!kofta_shm) return;
+    __kofta_init_args();
   }
 
 }
@@ -88,5 +109,39 @@ void __kofta_module_cov_ret(u16 cur_module) {
   if (!--module_stack[module_depth][1]) {
     --module_depth;
   }
-  
+
+}
+
+void __kofta_update_opts(void) {
+  static u32 prev_optcnt = 0xff;
+
+  if (!kofta_shm || !kofta_args->changed) return;
+  kofta_args->changed = 0;
+
+  *__argc_ptr = kofta_args->argcnt + kofta_args->optcnt;
+
+  kofta_arglist = mmap(kofta_arglist, kofta_arglist_size,
+                       PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED, kofta_args->memfd, 0);
+
+  if (prev_optcnt == kofta_args->optcnt) return;
+  prev_optcnt = kofta_args->optcnt;
+
+  (*__argv_ptr)[0] = kofta_arglist[0];
+  for (u32 i = 0; i < kofta_args->optcnt; i++) {
+    (*__argv_ptr)[i + 1] = kofta_arglist[kofta_args->argcnt + i];
+  }
+  for (u32 i = 1; i < kofta_args->argcnt; i++) {
+    (*__argv_ptr)[i + kofta_args->optcnt] = kofta_arglist[i];
+  }
+  (*__argv_ptr)[kofta_args->argcnt + kofta_args->optcnt] = NULL;
+}
+
+/* Some dirty tricks. */
+
+__attribute__((constructor(KOFTA_ARGSLEAK_PRIO))) static void __args_leak(void) {
+  asm volatile(
+    "lea 0x50(%%rsp), %0"
+    : "=r" (__argv_ptr)
+  );
+  __argc_ptr = (int *)((unsigned long)__argv_ptr + 0xc);
 }
