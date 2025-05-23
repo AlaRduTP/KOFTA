@@ -29,7 +29,7 @@ using namespace llvm;
 namespace {
 
   class OptionsMap {
-  
+
   public:
     OptionsMap(unsigned int map_id) : map_id(map_id) { }
     ~OptionsMap() = default;
@@ -40,7 +40,7 @@ namespace {
       }
       ofs << map_id << ' ' << size() << "\n";
       for (const auto &option : options) {
-        ofs << option.first << ' ' << option.second << "\n";
+        ofs << option.second << ' ' << option.first << "\n";
       }
     }
 
@@ -60,7 +60,7 @@ namespace {
   };
 
   class KOFTAAnalysis : public ModulePass {
-  
+
   public:
 
     static char ID;
@@ -85,6 +85,9 @@ namespace {
     FunctionCallee FuncModuleCovRet;
     FunctionCallee moduleCovRetProto(Module &M);
 
+    FunctionCallee FuncOptAnalysis;
+    FunctionCallee optAnalysisProto(Module &M);
+
     void initVars(Module &M);
 
     size_t extractOptions(Instruction *Inst, std::ofstream &kofta_opts);
@@ -102,7 +105,7 @@ namespace {
 char KOFTAAnalysis::ID = 0;
 
 bool KOFTAAnalysis::runOnModule(Module &M) {
-  
+
   if (isatty(2) && !getenv("AFL_QUIET")) {
     SAYF(cCYA "kofta-llvm-pass " cBRI KOFTA_VERSION cRST " by <me@alardutp.dev>\n");
   }
@@ -159,6 +162,16 @@ FunctionCallee KOFTAAnalysis::moduleCovRetProto(Module &M) {
 
 }
 
+FunctionCallee KOFTAAnalysis::optAnalysisProto(Module &M) {
+
+  FunctionType *FT =
+      FunctionType::get(VoidTy, { Int16Ty }, false);
+  FunctionCallee FC = M.getOrInsertFunction("__kofta_opt_analysis", FT);
+
+  return FC;
+
+}
+
 void KOFTAAnalysis::initVars(Module &M) {
 
   LLVMContext &C = M.getContext();
@@ -174,6 +187,8 @@ void KOFTAAnalysis::initVars(Module &M) {
 
   FuncModuleCov = moduleCovProto(M);
   FuncModuleCovRet = moduleCovRetProto(M);
+
+  FuncOptAnalysis = optAnalysisProto(M);
 
 }
 
@@ -206,6 +221,12 @@ size_t KOFTAAnalysis::extractOptions(Instruction *Inst, std::ofstream &kofta_opt
     parseStrcmp(CI->getArgOperand(1), options);
   }
 
+  if (options.size()) {
+    IRBuilder<> IRB(Inst);
+    ConstantInt *CalledFuncID = ConstantInt::get(Int16Ty, called_func_id);
+    IRB.CreateCall(FuncOptAnalysis, { CalledFuncID });
+  }
+
   options.dump(kofta_opts);
   return options.size();
 }
@@ -221,7 +242,7 @@ void KOFTAAnalysis::parseOptString(Value *OptString, OptionsMap &options) {
       }
     }
   }
-  
+
   StringRef OptStr;
 
   // Check if it's a constant expression (often a getelementptr).

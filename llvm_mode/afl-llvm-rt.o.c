@@ -116,14 +116,14 @@ static void __afl_start_forkserver(void) {
 
   while (1) {
 
-    __kofta_module_cov_reset();
-
     u32 was_killed;
     int status;
 
     /* Wait for parent by reading from the pipe. Abort if read fails. */
 
     if (read(FORKSRV_FD, &was_killed, 4) != 4) _exit(1);
+
+    __kofta_shm_reset();
 
     /* If we stopped the child in persistent mode, but there was a race
        condition and afl-fuzz already issued SIGKILL, write off the old
@@ -149,7 +149,7 @@ static void __afl_start_forkserver(void) {
         close(FORKSRV_FD);
         close(FORKSRV_FD + 1);
         return;
-  
+
       }
 
     } else {
