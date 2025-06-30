@@ -307,6 +307,12 @@ static void edit_params(u32 argc, char** argv) {
   }
 #endif
 
+  cc_params[cc_par_cnt++] = "-fsanitize-coverage=inline-8bit-counters,trace-cmp";
+  cc_params[cc_par_cnt++] = "-fsanitize=undefined";
+  cc_params[cc_par_cnt++] = "-fsanitize-undefined-trap-on-error";
+  // cc_params[cc_par_cnt++] = "-U_FORTIFY_SOURCE";
+  // cc_params[cc_par_cnt++] = "-fsanitize=address";
+
   cc_params[cc_par_cnt++] = alloc_printf("%s/kofta-llvm-rt.o", obj_path);
   cc_params[cc_par_cnt] = NULL;
 

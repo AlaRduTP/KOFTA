@@ -313,6 +313,7 @@ static struct kofta_shm* kofta_shm;
 static struct kofta_mcov* kofta_mcov;
 static struct kofta_args* kofta_args;
 static struct kofta_optana* kofta_optana;
+static struct kofta_tntana* kofta_tntana;
 
 static arglist* kofta_arglist;
 static arglist* kofta_optlist;
@@ -2392,6 +2393,9 @@ static void setup_kofta_shm(void) {
   kofta_args = &kofta_shm->args;
   kofta_optana = &kofta_shm->optana;
 
+  kofta_tntana = &kofta_shm->tntana;
+  kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
+
 }
 
 
@@ -2859,6 +2863,9 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
   }
 
+  u8 saved_tntana_mode = kofta_tntana->mode;
+  kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
+
   start_us = get_cur_time_us();
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
@@ -2917,6 +2924,8 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   }
 
   stop_us = get_cur_time_us();
+
+  kofta_tntana->mode = saved_tntana_mode;
 
   total_cal_us     += stop_us - start_us;
   total_cal_cycles += stage_max;
@@ -5467,6 +5476,78 @@ static u8 fuzz_one(char** argv) {
 
   orig_perf = perf_score = calculate_score(queue_cur);
 
+  /*******************************
+   * Taint inference on options. *
+   *******************************/
+
+  stage_short = "opttnt";
+  stage_name  = "options tainting";
+  stage_max   = kofta_args->optcnt;
+
+  /* Taint analysis setup. */
+
+  update_kofta_optlist(kofta_args->optcnt);
+  kofta_tntana->mode = KOFTA_TNTANA_MODE_SETUP;
+  if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+
+ /* Taint inference on each option. */
+
+  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+
+    if (kofta_optlist[stage_cur][0] == '-') continue;
+
+    u32 last_tntfnd = 0;
+
+    static u8 orig_opt[KOFTA_ARGV_SIZE];
+    u8* curr_opt = &kofta_optlist[stage_cur][0];
+
+    strncpy(orig_opt, curr_opt, KOFTA_ARGV_SIZE - 1);
+    orig_opt[KOFTA_ARGV_SIZE - 1] = '\0';
+
+    for (i = 0; curr_opt[i]; ++i) {
+
+      curr_opt[i] += 1;
+
+      kofta_tntana->mode = KOFTA_TNTANA_MODE_COMPR;
+      if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+
+      curr_opt[i] -= 1;
+
+      if (kofta_tntana->mode == KOFTA_TNTANA_MODE_FOUND && last_tntfnd != kofta_tntana->found) {
+
+        last_tntfnd = kofta_tntana->found;
+
+        switch (kofta_tntana->type) {
+
+        case KOFTA_TRACE_CMP:
+        case KOFTA_TRACE_SWT:
+
+          if (kofta_tntana->hint.num > 31 && kofta_tntana->hint.num < 127 && UR(100) < 70)
+            curr_opt[i] = kofta_tntana->hint.num;
+          else
+            sprintf(curr_opt + i, "%llu", kofta_tntana->hint.num);
+          break;
+
+        case KOFTA_TRACE_STR:
+
+          strcpy(curr_opt + i, kofta_tntana->hint.str);
+          break;
+
+        }
+
+        kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
+        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+
+        strcpy(curr_opt, orig_opt);
+
+      }
+
+    }
+
+  }
+
+  kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
+
   /*******************************************
    * Push one option to arglist for fuzzing. *
    *******************************************/
@@ -5523,18 +5604,7 @@ kofta_optshed1_stage:
 
       if (valreq) {
 
-        /* There is 50% chance option value is a digit, 50% chance is an alphabet. */
-
-        if (UR(100) < 50) {
-
-          kofta_optlist[kofta_args->optcnt + 1][0] = '0' + UR(10);
-
-        } else {
-
-          kofta_optlist[kofta_args->optcnt + 1][0] = 'a' + UR(26);
-
-        }
-
+        kofta_optlist[kofta_args->optcnt + 1][0] = '0';
         kofta_optlist[kofta_args->optcnt + 1][1] = '\0';
 
       }
@@ -5559,7 +5629,7 @@ kofta_optshed1_stage:
 
   stage_short = "optshed2";
   stage_name  = "optlist replacing";
-  stage_max   = queue_cur->optana.idcnt * 2;
+  stage_max   = queue_cur->optana.idcnt * 100;
 
   optshed = 2;
 

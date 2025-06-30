@@ -77,6 +77,8 @@ namespace {
     IntegerType *Int32Ty;
     IntegerType *Int64Ty;
 
+    PointerType *Int8PtrTy;
+
     ConstantInt *ModuleID;
 
     FunctionCallee FuncModuleCov;
@@ -88,6 +90,9 @@ namespace {
     FunctionCallee FuncOptAnalysis;
     FunctionCallee optAnalysisProto(Module &M);
 
+    FunctionCallee FuncTraceStr;
+    FunctionCallee traceStrProto(Module &M);
+
     void initVars(Module &M);
 
     size_t extractOptions(Instruction *Inst, std::ofstream &kofta_opts);
@@ -98,6 +103,8 @@ namespace {
 
     void logRet(Instruction *Inst);
     void logFunc(Function *F);
+
+    void sanitizerCovTraceString(CallInst *CI, Value *Str1, Value *Str2);
   };
 
 } // end anonymous namespace
@@ -172,6 +179,16 @@ FunctionCallee KOFTAAnalysis::optAnalysisProto(Module &M) {
 
 }
 
+FunctionCallee KOFTAAnalysis::traceStrProto(Module &M) {
+
+  FunctionType *FT =
+      FunctionType::get(VoidTy, { Int8PtrTy, Int8PtrTy }, false);
+  FunctionCallee FC = M.getOrInsertFunction("__kofta_trace_str", FT);
+
+  return FC;
+
+}
+
 void KOFTAAnalysis::initVars(Module &M) {
 
   LLVMContext &C = M.getContext();
@@ -183,12 +200,16 @@ void KOFTAAnalysis::initVars(Module &M) {
   Int32Ty = Type::getInt32Ty(C);
   Int64Ty = Type::getInt64Ty(C);
 
+  Int8PtrTy = Type::getInt8PtrTy(C);
+
   ModuleID = ConstantInt::get(Int16Ty, R(MAP_SIZE));
 
   FuncModuleCov = moduleCovProto(M);
   FuncModuleCovRet = moduleCovRetProto(M);
 
   FuncOptAnalysis = optAnalysisProto(M);
+
+  FuncTraceStr = traceStrProto(M);
 
 }
 
@@ -219,6 +240,7 @@ size_t KOFTAAnalysis::extractOptions(Instruction *Inst, std::ofstream &kofta_opt
   else if (CalledFunc->getName() == "strcmp") {
     parseStrcmp(CI->getArgOperand(0), options);
     parseStrcmp(CI->getArgOperand(1), options);
+    sanitizerCovTraceString(CI, CI->getArgOperand(0), CI->getArgOperand(1));
   }
 
   if (options.size()) {
@@ -352,6 +374,40 @@ void KOFTAAnalysis::logRet(Instruction *Inst) {
 
   IRBuilder<> IRB(Inst);
   IRB.CreateCall(FuncModuleCovRet, { ModuleID });
+
+}
+
+void KOFTAAnalysis::sanitizerCovTraceString(CallInst *CI, Value *Str1, Value *Str2) {
+
+  ConstantExpr *Cnst = nullptr;
+  Value *Argv;
+
+  if (auto *CE = dyn_cast<ConstantExpr>(Str1)) {
+    Cnst = CE;
+    Argv = Str2;
+  }
+  if (auto *CE = dyn_cast<ConstantExpr>(Str2)) {
+    if (Cnst) return; // Both arguments cannot be constant expressions.
+    Cnst = CE;
+    Argv = Str1;
+  }
+  if (!Cnst) return; // Neither argument is a constant expression.
+
+  if (Cnst->getOpcode() == Instruction::GetElementPtr) {
+    if (GlobalVariable *GV = dyn_cast<GlobalVariable>(Cnst->getOperand(0))) {
+      if (GV->hasInitializer())
+        if (ConstantDataArray *CDA = dyn_cast<ConstantDataArray>(GV->getInitializer())) {
+          StringRef CString = CDA->getAsCString();
+          if (CString.startswith("-")) return; // Skip if the string starts with a dash.
+        }
+    }
+  }
+
+  IRBuilder<> IRB(CI);
+  IRB.CreateCall(FuncTraceStr, {
+    Cnst->getOperand(0), // The constant string (first operand of the constant expression)
+    Argv // The second argument (which is not a constant expression)
+  });
 
 }
 
