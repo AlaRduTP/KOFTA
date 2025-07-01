@@ -8576,7 +8576,7 @@ int main(int argc, char** argv) {
 
   /* Enable -d option by default. */
   skip_deterministic = 1;
-  use_splicing = 1;
+  // use_splicing = 1;
 
   if (optind == argc || !in_dir || !out_dir) usage(argv[0]);
 
