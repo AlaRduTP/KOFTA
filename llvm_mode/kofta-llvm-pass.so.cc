@@ -45,7 +45,8 @@ namespace {
     }
 
     void addOption(const std::string &name, int hasArg) {
-      options.emplace_back(name, hasArg);
+      if (options.count(name)) return;
+      options[name] = hasArg;
     }
 
     size_t size() const {
@@ -56,7 +57,7 @@ namespace {
     unsigned int map_id;
 
     // < option name, has_arg >
-    std::vector<std::pair<std::string, int>> options;
+    std::map<std::string, int> options;
   };
 
   class KOFTAAnalysis : public ModulePass {
