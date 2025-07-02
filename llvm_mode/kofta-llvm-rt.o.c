@@ -169,20 +169,20 @@ void __kofta_update_opts(void) {
 }
 
 
-static void __kofta_taint_set_hint(union kofta_tntdat* dest, void* src, u8 type) {
+static void __kofta_taint_may_set_hint(void* src, u8 type, u32 tntidx) {
 
-  static u8 prob = 5;
+  if (kofta_tntana->hint_cnt == KOFTA_HINTS_MAX) return;
+
+  u32 hint_idx = kofta_tntana->hint_cnt++;
+  union kofta_tntdat* dest = &kofta_tntana->hints[hint_idx];
+
+  kofta_tntana->types[hint_idx] = type;
 
   switch (type) {
 
   case KOFTA_TRACE_CMP: {
 
-    if (!prob) break;
-
     dest->num = *(u64*)src;
-
-    if (!R(prob--)) prob = 0;
-
     break;
 
   }
@@ -190,25 +190,19 @@ static void __kofta_taint_set_hint(union kofta_tntdat* dest, void* src, u8 type)
   case KOFTA_TRACE_SWT: {
 
     dest->num = ((u64*)src)[R(((u64*)src)[0]) + 2];
-
     break;
 
   }
 
   case KOFTA_TRACE_STR: {
 
-    if (!prob) break;
-
     strncpy(dest->str, (u8*)src, KOFTA_ARGV_SIZE - 1);
     dest->str[KOFTA_ARGV_SIZE - 1] = '\0';
-
-    if (!R(prob--)) prob = 0;
-
     break;
 
   }
 
-}
+  }
 
 }
 
@@ -217,6 +211,7 @@ static void __kofta_taint_analysis(u8 type, u8 hash, void* data) {
 
   static u32 tntidx = 0;
   static u8  chara = 0;
+  static u8  anastate = 0;
 
   switch (kofta_tntana->mode) {
 
@@ -237,12 +232,10 @@ static void __kofta_taint_analysis(u8 type, u8 hash, void* data) {
     if (likely(kofta_tntana->trace_hash[tntidx++] == hash)) return;
 
     chara = hash & 0xf;
+    kofta_tntana->found = tntidx;
 
     kofta_tntana->mode = KOFTA_TNTANA_MODE_FOUND;
-    kofta_tntana->found = tntidx;
-    kofta_tntana->type = type;
-
-    __kofta_taint_set_hint(&kofta_tntana->hint, data, type);
+    __kofta_taint_may_set_hint(data, type, tntidx);
 
     return;
 
@@ -250,9 +243,42 @@ static void __kofta_taint_analysis(u8 type, u8 hash, void* data) {
 
   case KOFTA_TNTANA_MODE_FOUND: {
 
-    if (chara != (hash & 0xf)) return;
+    if (unlikely(tntidx == kofta_tntana->trace_cnt)) return;
 
-    __kofta_taint_set_hint(&kofta_tntana->hint, data, type);
+    switch (anastate) {
+
+    case 0: {
+
+      if (chara != (hash & 0xf))
+        anastate = 1;
+      else
+        __kofta_taint_may_set_hint(data, type, tntidx);
+      break;
+
+    }
+
+    case 1: {
+
+      if (kofta_tntana->trace_hash[tntidx] == hash)
+        anastate = 2;
+      break;
+
+    }
+
+    case 2: {
+
+      if (kofta_tntana->trace_hash[tntidx] == hash) break;
+
+      chara = hash & 0xf;
+
+      anastate = 0;
+      __kofta_taint_may_set_hint(data, type, tntidx);
+
+    }
+
+    }
+
+    ++tntidx;
 
     return;
 
@@ -272,12 +298,18 @@ static inline void __kofta_taint_analysis_reset(void) {
 
   };
 
+  if (unlikely(kofta_tntana->mode == KOFTA_TNTANA_MODE_COMPR)) {
+
+    kofta_tntana->hint_cnt = 0;
+
+  }
+
 }
 
 
 static inline void __kofta_trace_cmp(u8 size, u64 cnst, u64 argv) {
 
-  if (likely(!kofta_shm || kofta_tntana->mode == KOFTA_TNTANA_MODE_NOP)) return;
+  if (likely(!cnst || !kofta_shm || kofta_tntana->mode == KOFTA_TNTANA_MODE_NOP)) return;
 
   u8 chara = size ^ (argv & 0xff);
   u8 hash = ((chara * cnst) << 4) | (chara & 0xf);

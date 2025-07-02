@@ -273,7 +273,9 @@ struct queue_entry {
 
   u8* alname;                         /* Name of the arglist file         */
 
-  struct kofta_optana optana;        /* Options runtime analysis         */
+  struct kofta_optana optana;         /* Options runtime analysis         */
+
+  u8  tainted;                        /* Tainted?                         */
 
 };
 
@@ -876,6 +878,7 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det, u8* alname) {
   q->passed_det   = passed_det;
 
   q->alname       = alname;
+  q->tainted      = 0;
 
   if (q->depth > max_depth) max_depth = q->depth;
 
@@ -5480,6 +5483,10 @@ static u8 fuzz_one(char** argv) {
    * Taint inference on options. *
    *******************************/
 
+  if (queue_cur->tainted)
+    goto kofta_skip_opttnt_stage;
+  queue_cur->tainted = 1;
+
   stage_short = "opttnt";
   stage_name  = "options tainting";
   stage_max   = kofta_args->optcnt;
@@ -5517,34 +5524,40 @@ static u8 fuzz_one(char** argv) {
 
         last_tntfnd = kofta_tntana->found;
 
-        switch (kofta_tntana->type) {
+        for (j = 0; j < kofta_tntana->hint_cnt; j++) {
 
-        case KOFTA_TRACE_CMP:
-        case KOFTA_TRACE_SWT:
+          switch (kofta_tntana->types[j]) {
 
-          if (kofta_tntana->hint.num > 31 && kofta_tntana->hint.num < 127 && UR(100) < 70)
-            curr_opt[i] = kofta_tntana->hint.num;
-          else
-            sprintf(curr_opt + i, "%llu", kofta_tntana->hint.num);
-          break;
+          case KOFTA_TRACE_CMP:
+          case KOFTA_TRACE_SWT:
 
-        case KOFTA_TRACE_STR:
+            if (kofta_tntana->hints[j].num > 31 && kofta_tntana->hints[j].num < 127 && UR(100) < 70)
+              curr_opt[i] = kofta_tntana->hints[j].num;
+            else
+              sprintf(curr_opt + i, "%llu", kofta_tntana->hints[j].num);
+            break;
 
-          strcpy(curr_opt + i, kofta_tntana->hint.str);
-          break;
+          case KOFTA_TRACE_STR:
+
+            strcpy(curr_opt + i, kofta_tntana->hints[j].str);
+            break;
+
+          }
+
+          kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
+          if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+
+          strcpy(curr_opt, orig_opt);
 
         }
-
-        kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
-        if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
-
-        strcpy(curr_opt, orig_opt);
 
       }
 
     }
 
   }
+
+kofta_skip_opttnt_stage:
 
   kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
 
@@ -5638,6 +5651,14 @@ kofta_optshed1_stage:
   goto kofta_optshed1_stage;
 
 kofta_optshed2_end:
+
+#ifdef KOFTA_SKIPDOC
+
+  /* Skip the havoc and splicing stage. */
+
+  goto abandon_entry;
+
+#endif /* KOFTA_SKIPDOC */
 
   /* Skip right away if -d is given, if we have done deterministic fuzzing on
      this entry ourselves (was_fuzzed), or if it has gone through deterministic
@@ -8576,7 +8597,7 @@ int main(int argc, char** argv) {
 
   /* Enable -d option by default. */
   skip_deterministic = 1;
-  // use_splicing = 1;
+  use_splicing = 1;
 
   if (optind == argc || !in_dir || !out_dir) usage(argv[0]);
 

@@ -22,6 +22,9 @@
 #define KOFTA_TRACE_STR 'F'
 
 
+#define KOFTA_HINTS_MAX (MAP_SIZE / KOFTA_ARGV_SIZE)
+
+
 #include "../config.h"
 #include "../types.h"
 
@@ -60,8 +63,9 @@ struct kofta_tntana {
   u32 trace_cnt;
   u8  mode;
   u32 found;
-  u8  type;
-  union kofta_tntdat hint;
+  u32 hint_cnt;
+  u8  types[KOFTA_HINTS_MAX];
+  union kofta_tntdat hints[KOFTA_HINTS_MAX];
 };
 
 

@@ -238,7 +238,7 @@ size_t KOFTAAnalysis::extractOptions(Instruction *Inst, std::ofstream &kofta_opt
     parseLongOpt(LongOpt, options);
   }
   // Check if this call is to 'strcmp'
-  else if (CalledFunc->getName() == "strcmp") {
+  else if (CalledFunc->getName() == "strcmp" || CalledFunc->getName() == "strncmp") {
     parseStrcmp(CI->getArgOperand(0), options);
     parseStrcmp(CI->getArgOperand(1), options);
     sanitizerCovTraceString(CI, CI->getArgOperand(0), CI->getArgOperand(1));
@@ -380,35 +380,29 @@ void KOFTAAnalysis::logRet(Instruction *Inst) {
 
 void KOFTAAnalysis::sanitizerCovTraceString(CallInst *CI, Value *Str1, Value *Str2) {
 
-  ConstantExpr *Cnst = nullptr;
-  Value *Argv;
+  Value *Argv = Str1;
+  Value *Cnst = Str2;
 
-  if (auto *CE = dyn_cast<ConstantExpr>(Str1)) {
-    Cnst = CE;
+  if (dyn_cast<ConstantExpr>(Str1)) {
+    if (dyn_cast<ConstantExpr>(Str2)) return; // Both arguments are constant expressions.
+    Cnst = Str1;
     Argv = Str2;
   }
-  if (auto *CE = dyn_cast<ConstantExpr>(Str2)) {
-    if (Cnst) return; // Both arguments cannot be constant expressions.
-    Cnst = CE;
-    Argv = Str1;
-  }
-  if (!Cnst) return; // Neither argument is a constant expression.
 
-  if (Cnst->getOpcode() == Instruction::GetElementPtr) {
-    if (GlobalVariable *GV = dyn_cast<GlobalVariable>(Cnst->getOperand(0))) {
-      if (GV->hasInitializer())
-        if (ConstantDataArray *CDA = dyn_cast<ConstantDataArray>(GV->getInitializer())) {
-          StringRef CString = CDA->getAsCString();
-          if (CString.startswith("-")) return; // Skip if the string starts with a dash.
-        }
+  if (ConstantExpr *CE = dyn_cast<ConstantExpr>(Cnst)) {
+    if (CE->getOpcode() == Instruction::GetElementPtr) {
+      if (GlobalVariable *GV = dyn_cast<GlobalVariable>(CE->getOperand(0))) {
+        if (GV->hasInitializer())
+          if (ConstantDataArray *CDA = dyn_cast<ConstantDataArray>(GV->getInitializer())) {
+            StringRef CString = CDA->getAsCString();
+            if (CString.startswith("-")) return; // Skip if the string starts with a dash.
+          }
+      }
     }
   }
 
   IRBuilder<> IRB(CI);
-  IRB.CreateCall(FuncTraceStr, {
-    Cnst->getOperand(0), // The constant string (first operand of the constant expression)
-    Argv // The second argument (which is not a constant expression)
-  });
+  IRB.CreateCall(FuncTraceStr, { Cnst, Argv });
 
 }
 
