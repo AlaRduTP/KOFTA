@@ -337,10 +337,13 @@ static inline void __kofta_trace_swt(u8 size, u64* cases, u64 argv) {
 }
 
 
-static inline u8 __kofta_hash_str(const u8* str) {
+static inline u8 __kofta_hash_str(const u8* str, s64 len) {
+
+  if (len < 0)
+    while (str[++len]);
 
   u8 hash = 0;
-  while (*str) {
+  while (*str && len--) {
     hash = (hash << 1) ^ *str;
     ++str;
   }
@@ -349,12 +352,12 @@ static inline u8 __kofta_hash_str(const u8* str) {
 }
 
 
-void __kofta_trace_str(u8* cnst, u8* argv) {
+void __kofta_trace_str(u8* cnst, u8* argv, s64 len) {
 
   if (likely(!kofta_shm || kofta_tntana->mode == KOFTA_TNTANA_MODE_NOP)) return;
 
-  u8 chara = __kofta_hash_str(argv);
-  u8 hash = ((chara * __kofta_hash_str(cnst)) << 4) | (chara & 0xf);
+  u8 chara = __kofta_hash_str(argv, len);
+  u8 hash = ((chara * __kofta_hash_str(cnst, len)) << 4) | (chara & 0xf);
 
   __kofta_taint_analysis(KOFTA_TRACE_STR, hash, cnst);
 

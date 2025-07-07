@@ -2502,7 +2502,7 @@ static void read_kofta_arglist(u8* alname) {
   kofta_args->argcnt = altemp[0];
   kofta_args->optcnt = altemp[1];
 
-  munmap(altemp, kofta_arglist_size);
+  munmap(altemp, kofta_arglist_size + 2);
 
 }
 
@@ -5493,11 +5493,27 @@ static u8 fuzz_one(char** argv) {
 
   /* Taint analysis setup. */
 
+  for (i = 0; i < kofta_args->optcnt; ++i) {
+
+    if (kofta_optlist[i][0] == '-') continue;
+
+    u8* curr_opt = &kofta_optlist[i][0];
+    for (j = 0; curr_opt[j]; ++j);
+
+    if (j < KOFTA_ARGV_SIZE - 1) {
+
+      curr_opt[j] = '0';
+      curr_opt[j + 1] = '\0';
+
+    }
+
+  }
+
   update_kofta_optlist(kofta_args->optcnt);
   kofta_tntana->mode = KOFTA_TNTANA_MODE_SETUP;
   if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
 
- /* Taint inference on each option. */
+  /* Taint inference on each option. */
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
@@ -5515,6 +5531,7 @@ static u8 fuzz_one(char** argv) {
 
       curr_opt[i] += 1;
 
+      update_kofta_optlist(kofta_args->optcnt);
       kofta_tntana->mode = KOFTA_TNTANA_MODE_COMPR;
       if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
 
@@ -5544,6 +5561,7 @@ static u8 fuzz_one(char** argv) {
 
           }
 
+          update_kofta_optlist(kofta_args->optcnt);
           kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
           if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
 
@@ -5556,6 +5574,10 @@ static u8 fuzz_one(char** argv) {
     }
 
   }
+
+  /* Reset the arglist. */
+
+  read_kofta_arglist(queue_cur->alname);
 
 kofta_skip_opttnt_stage:
 
@@ -5651,6 +5673,72 @@ kofta_optshed1_stage:
   goto kofta_optshed1_stage;
 
 kofta_optshed2_end:
+
+  /* Reset the arglist. */
+
+  read_kofta_arglist(queue_cur->alname);
+
+  /********************
+   * Optlist Splicing *
+   ********************/
+
+  stage_short = "optsplice";
+  stage_name  = "optlist splicing";
+  stage_max   = queued_paths / 10;
+
+  if (!kofta_args->optcnt) goto kofta_optsplice_end;
+
+  u32 r_splice = kofta_args->optcnt / 2;
+  r_splice -= kofta_optlist[r_splice][0] != '-';
+
+  u32 r_optcnt = kofta_args->optcnt - r_splice;
+
+  u8* splice_buf = ck_alloc_nozero(r_optcnt * KOFTA_ARGV_SIZE);
+  memcpy(splice_buf, &kofta_optlist[r_splice][0], r_optcnt * KOFTA_ARGV_SIZE);
+
+  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+
+    struct queue_entry* target;
+    u32 tid;
+
+    /* Pick a random queue entry and seek to it. Don't splice with yourself. */
+
+    do { tid = UR(queued_paths); } while (tid == current_entry);
+
+    target = queue;
+
+    while (tid >= 100) { target = target->next_100; tid -= 100; }
+    while (tid--) target = target->next;
+
+    /* Make sure that the target has a reasonable optlist. */
+
+    read_kofta_arglist(target->alname);
+    if (!kofta_args->optcnt) continue;
+
+    /* Do the thing. */
+
+    u32 l_optcnt = kofta_args->optcnt / 2;
+    l_optcnt += l_optcnt + 1 <= kofta_args->optcnt && kofta_optlist[l_optcnt][0] != '-';
+
+    memcpy(&kofta_optlist[l_optcnt][0], splice_buf, r_optcnt * KOFTA_ARGV_SIZE);
+    update_kofta_optlist(l_optcnt + r_optcnt);
+
+    if (common_fuzz_stuff(argv, out_buf, len)) {
+
+      ck_free(splice_buf);
+      goto abandon_entry;
+
+    }
+
+  }
+
+  ck_free(splice_buf);
+
+kofta_optsplice_end:
+
+  /* Reset the arglist. */
+
+  read_kofta_arglist(queue_cur->alname);
 
 #ifdef KOFTA_SKIPDOC
 
