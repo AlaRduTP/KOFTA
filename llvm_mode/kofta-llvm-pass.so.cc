@@ -80,6 +80,8 @@ namespace {
 
     PointerType *Int8PtrTy;
 
+    ConstantInt *CnstNegOne;
+
     ConstantInt *ModuleID;
 
     FunctionCallee FuncModuleCov;
@@ -105,7 +107,7 @@ namespace {
     void logRet(Instruction *Inst);
     void logFunc(Function *F);
 
-    void sanitizerCovTraceString(CallInst *CI, Value *Str1, Value *Str2);
+    void sanitizerCovTraceString(CallInst *CI, Value *Str1, Value *Str2, Value *Len = nullptr);
   };
 
 } // end anonymous namespace
@@ -183,7 +185,7 @@ FunctionCallee KOFTAAnalysis::optAnalysisProto(Module &M) {
 FunctionCallee KOFTAAnalysis::traceStrProto(Module &M) {
 
   FunctionType *FT =
-      FunctionType::get(VoidTy, { Int8PtrTy, Int8PtrTy }, false);
+      FunctionType::get(VoidTy, { Int8PtrTy, Int8PtrTy, Int64Ty }, false);
   FunctionCallee FC = M.getOrInsertFunction("__kofta_trace_str", FT);
 
   return FC;
@@ -202,6 +204,8 @@ void KOFTAAnalysis::initVars(Module &M) {
   Int64Ty = Type::getInt64Ty(C);
 
   Int8PtrTy = Type::getInt8PtrTy(C);
+
+  CnstNegOne = ConstantInt::get(Int64Ty, -1);
 
   ModuleID = ConstantInt::get(Int16Ty, R(MAP_SIZE));
 
@@ -238,10 +242,15 @@ size_t KOFTAAnalysis::extractOptions(Instruction *Inst, std::ofstream &kofta_opt
     parseLongOpt(LongOpt, options);
   }
   // Check if this call is to 'strcmp'
-  else if (CalledFunc->getName() == "strcmp" || CalledFunc->getName() == "strncmp") {
+  else if (CalledFunc->getName() == "strcmp") {
     parseStrcmp(CI->getArgOperand(0), options);
     parseStrcmp(CI->getArgOperand(1), options);
     sanitizerCovTraceString(CI, CI->getArgOperand(0), CI->getArgOperand(1));
+  }
+  else if (CalledFunc->getName() == "strncmp") {
+    parseStrcmp(CI->getArgOperand(0), options);
+    parseStrcmp(CI->getArgOperand(1), options);
+    sanitizerCovTraceString(CI, CI->getArgOperand(0), CI->getArgOperand(1), CI->getArgOperand(2));
   }
 
   if (options.size()) {
@@ -378,10 +387,12 @@ void KOFTAAnalysis::logRet(Instruction *Inst) {
 
 }
 
-void KOFTAAnalysis::sanitizerCovTraceString(CallInst *CI, Value *Str1, Value *Str2) {
+void KOFTAAnalysis::sanitizerCovTraceString(CallInst *CI, Value *Str1, Value *Str2, Value *Len) {
 
   Value *Argv = Str1;
   Value *Cnst = Str2;
+
+  if (Len == nullptr) Len = CnstNegOne;
 
   if (dyn_cast<ConstantExpr>(Str1)) {
     if (dyn_cast<ConstantExpr>(Str2)) return; // Both arguments are constant expressions.
@@ -402,7 +413,7 @@ void KOFTAAnalysis::sanitizerCovTraceString(CallInst *CI, Value *Str1, Value *St
   }
 
   IRBuilder<> IRB(CI);
-  IRB.CreateCall(FuncTraceStr, { Cnst, Argv });
+  IRB.CreateCall(FuncTraceStr, { Cnst, Argv, Len });
 
 }
 
