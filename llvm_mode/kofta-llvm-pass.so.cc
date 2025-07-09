@@ -100,8 +100,7 @@ namespace {
 
     size_t extractOptions(Instruction *Inst, std::ofstream &kofta_opts);
 
-    void parseOptString(Value *OptString, OptionsMap &options);
-    void parseLongOpt(Value *LongOpt, OptionsMap &options);
+    void parseOpts(CallInst *CI, OptionsMap &options);
     void parseStrcmp(Value *OptString, OptionsMap &options);
 
     void logRet(Instruction *Inst);
@@ -227,27 +226,17 @@ size_t KOFTAAnalysis::extractOptions(Instruction *Inst, std::ofstream &kofta_opt
   unsigned int called_func_id = R(MAP_SIZE);
   OptionsMap options(called_func_id);
 
-  // Check if this call is to 'getopt'
-  if (CalledFunc->getName() == "getopt") {
-    // getopt has the prototype: int getopt(int argc, char * const argv[], const char *optstring)
-    // so the third argument (index 2) is the options string.
-    Value *OptString = CI->getArgOperand(2);
-    parseOptString(OptString, options);
-  }
-  // Check if this call is to 'getopt_long'
-  else if (CalledFunc->getName() == "getopt_long") {
-    Value *OptString = CI->getArgOperand(2);
-    parseOptString(OptString, options);
-    Value *LongOpt = CI->getArgOperand(3);
-    parseLongOpt(LongOpt, options);
+  // // Check if this call is to '*getopt*'
+  if (CalledFunc->getName().contains("getopt")) {
+    parseOpts(CI, options);
   }
   // Check if this call is to 'strcmp'
-  else if (CalledFunc->getName() == "strcmp") {
+  else if (CalledFunc->getName() == "strcmp" || CalledFunc->getName() == "strcasecmp") {
     parseStrcmp(CI->getArgOperand(0), options);
     parseStrcmp(CI->getArgOperand(1), options);
     sanitizerCovTraceString(CI, CI->getArgOperand(0), CI->getArgOperand(1));
   }
-  else if (CalledFunc->getName() == "strncmp") {
+  else if (CalledFunc->getName() == "strncmp" || CalledFunc->getName() == "strncasecmp" || CalledFunc->getName() == "memcmp") {
     parseStrcmp(CI->getArgOperand(0), options);
     parseStrcmp(CI->getArgOperand(1), options);
     sanitizerCovTraceString(CI, CI->getArgOperand(0), CI->getArgOperand(1), CI->getArgOperand(2));
@@ -261,93 +250,97 @@ size_t KOFTAAnalysis::extractOptions(Instruction *Inst, std::ofstream &kofta_opt
 
   options.dump(kofta_opts);
   return options.size();
+
 }
 
-void KOFTAAnalysis::parseOptString(Value *OptString, OptionsMap &options) {
-  if(auto *LI = dyn_cast<LoadInst>(OptString)) {
-    if (LI->getType()->isPointerTy()) {
-      Value *Ptr = LI->getPointerOperand();
-      if (auto *GV = dyn_cast<GlobalVariable>(Ptr)) {
-        if (GV->hasInitializer()) {
-          OptString = GV->getInitializer();
+void KOFTAAnalysis::parseOpts(CallInst *CI, OptionsMap &options) {
+
+  for (unsigned i = 0, e = CI->getNumArgOperands(); i < e; ++i) {
+
+    Value *Arg = CI->getArgOperand(i);
+
+    if (LoadInst *LI = dyn_cast<LoadInst>(Arg)) {
+      if (!LI->getPointerOperandType()->isPointerTy()) continue;
+      GlobalVariable *GV = dyn_cast<GlobalVariable>(LI->getPointerOperand());
+      if (!GV || !GV->hasInitializer()) continue;
+      Arg = GV->getInitializer();
+    }
+
+    ConstantExpr *CE = dyn_cast<ConstantExpr>(Arg);
+    if (!CE || CE->getOpcode() != Instruction::GetElementPtr) continue;
+    GlobalVariable *GV = dyn_cast<GlobalVariable>(CE->getOperand(0));
+    if (!GV || !GV->hasInitializer()) continue;
+
+    Arg = GV->getInitializer();
+
+    if (ConstantDataArray *CDA = dyn_cast<ConstantDataArray>(Arg)) {
+
+      StringRef OptStr = CDA->getAsCString();
+      if (OptStr.empty()) continue;
+
+      for (unsigned j = 0, n = OptStr.size(); j < n; ++j) {
+        char optChar = OptStr[j];
+        if (optChar == ':')
+          continue;
+        bool requiredArg = (j + 1) < n && OptStr[j + 1] == ':';
+        bool optionalArg = requiredArg && (j + 2) < n && OptStr[j + 2] == ':';
+        options.addOption("-" + std::string{optChar}, optionalArg ? 2 : (requiredArg ? 1 : 0));
+      }
+
+    }
+    else if (ConstantArray *CA = dyn_cast<ConstantArray>(Arg)) {
+
+      for (unsigned j = 0, n = CA->getNumOperands(); j < n; ++j) {
+
+        Constant *Elem = CA->getOperand(j);
+        ConstantStruct *OptLong = dyn_cast<ConstantStruct>(Elem);
+        if (!OptLong) continue;
+
+        GlobalVariable *GV = dyn_cast<GlobalVariable>(OptLong->getOperand(0)->stripPointerCasts());
+        if (!GV || !GV->hasInitializer()) continue;
+        ConstantDataArray *NameField = dyn_cast<ConstantDataArray>(GV->getInitializer());
+        if (!NameField || !NameField->isCString()) continue;
+
+        std::string option_long = NameField->getAsCString().str();
+        std::string option_short;
+        int has_arg_value = 2;
+
+        size_t pos = option_long.find_first_not_of('-');
+        if (pos) option_long.erase(0, pos);
+        pos = option_long.find_first_of('=');
+        if (pos != std::string::npos) {
+          option_long.erase(pos);
+          has_arg_value = 1;
         }
-      }
-    }
-  }
+        option_long.insert(0, "--");
 
-  StringRef OptStr;
-
-  // Check if it's a constant expression (often a getelementptr).
-  if (auto *CE = dyn_cast<ConstantExpr>(OptString)) {
-    if (CE->getOpcode() == Instruction::GetElementPtr) {
-      if (GlobalVariable *GV = dyn_cast<GlobalVariable>(CE->getOperand(0))) {
-        if (GV->hasInitializer())
-          if (ConstantDataArray *CDA = dyn_cast<ConstantDataArray>(GV->getInitializer()))
-            OptStr = CDA->getAsCString();
-      }
-    }
-  }
-
-  if (!OptStr.empty()) {
-    // Parse the options string...
-    for (unsigned i = 0, n = OptStr.size(); i < n; ++i) {
-      char optChar = OptStr[i];
-      if (optChar == ':')
-        continue;
-      bool requiredArg = (i + 1) < n && OptStr[i + 1] == ':';
-      bool optionalArg = requiredArg && (i + 2) < n && OptStr[i + 2] == ':';
-      options.addOption("-" + std::string{optChar}, optionalArg ? 2 : (requiredArg ? 1 : 0));
-    }
-  }
-}
-
-void KOFTAAnalysis::parseLongOpt(Value *LongOpt, OptionsMap &options) {
-  if (auto *CE = dyn_cast<ConstantExpr>(LongOpt)) {
-    if (CE->getOpcode() == Instruction::GetElementPtr) {
-      if (GlobalVariable *GV = dyn_cast<GlobalVariable>(CE->getOperand(0))) {
-        if (GV->hasInitializer())
-          if (ConstantArray *CA = dyn_cast<ConstantArray>(GV->getInitializer())) {
-            for (unsigned i = 0, e = CA->getNumOperands(); i < e; ++i) {
-              Constant *Elem = CA->getOperand(i);
-              // Each element should be a struct (an instance of struct option)
-              if (auto *CS = dyn_cast<ConstantStruct>(Elem)) {
-                // The first field of the struct is the option name.
-                Constant *NameField = CS->getOperand(0);
-                // Stop if the option name is null (the sentinel element)
-                if (NameField->isNullValue())
-                  break;
-                // The option name is typically stored as a pointer to a global constant string.
-                if (auto *NameGV = dyn_cast<GlobalVariable>(NameField->stripPointerCasts())) {
-                  if (GV->hasInitializer())
-                    if (ConstantDataArray *CDA = dyn_cast<ConstantDataArray>(NameGV->getInitializer())) {
-                      std::string option_long = "--" + CDA->getAsCString().str();
-                      std::string option_short;
-                      Constant *ShortField = CS->getOperand(3);
-                      if (auto *ShortInt = dyn_cast<ConstantInt>(ShortField)) {
-                        char short_value = ShortInt->getSExtValue();
-                        if (isalpha(short_value)) {
-                          option_short.push_back('-');
-                          option_short.push_back(short_value);
-                        }
-                      }
-                      int has_arg_value;
-                      Constant *HasArgField = CS->getOperand(1);
-                      if (auto *HasArgInt = dyn_cast<ConstantInt>(HasArgField)) {
-                        has_arg_value = HasArgInt->getSExtValue();
-                      }
-                      if (!option_short.empty()) {
-                        options.addOption(option_short, has_arg_value);
-                      } else {
-                        options.addOption(option_long, has_arg_value);
-                      }
-                    }
-                }
-              }
+        if (OptLong->getNumOperands() == 4) {
+          Constant *ShortField = OptLong->getOperand(3);
+          if (auto *ShortInt = dyn_cast<ConstantInt>(ShortField)) {
+            char short_value = ShortInt->getSExtValue();
+            if (isalpha(short_value)) {
+              option_short.push_back('-');
+              option_short.push_back(short_value);
             }
           }
+          Constant *HasArgField = OptLong->getOperand(1);
+          if (auto *HasArgInt = dyn_cast<ConstantInt>(HasArgField)) {
+            has_arg_value = HasArgInt->getSExtValue();
+          }
+        }
+
+        if (!option_short.empty()) {
+          options.addOption(option_short, has_arg_value);
+        } else {
+          options.addOption(option_long, has_arg_value);
+        }
+
       }
+
     }
+
   }
+
 }
 
 void KOFTAAnalysis::parseStrcmp(Value *OptString, OptionsMap &options) {
@@ -358,9 +351,11 @@ void KOFTAAnalysis::parseStrcmp(Value *OptString, OptionsMap &options) {
       if (GlobalVariable *GV = dyn_cast<GlobalVariable>(CE->getOperand(0))) {
         if (GV->hasInitializer())
           if (ConstantDataArray *CDA = dyn_cast<ConstantDataArray>(GV->getInitializer())) {
-            StringRef CString = CDA->getAsCString();
-            if (CString.size() > 1 && CString.startswith("-")) {
-              opt_str = CString.str();
+            if (CDA->isCString()) {
+              StringRef CString = CDA->getAsCString();
+              if (CString.size() > 1 && CString.startswith("-")) {
+                opt_str = CString.str();
+              }
             }
           }
       }
@@ -405,6 +400,7 @@ void KOFTAAnalysis::sanitizerCovTraceString(CallInst *CI, Value *Str1, Value *St
       if (GlobalVariable *GV = dyn_cast<GlobalVariable>(CE->getOperand(0))) {
         if (GV->hasInitializer())
           if (ConstantDataArray *CDA = dyn_cast<ConstantDataArray>(GV->getInitializer())) {
+            if (!CDA->isCString()) return; // Not a C-style string.
             StringRef CString = CDA->getAsCString();
             if (CString.startswith("-")) return; // Skip if the string starts with a dash.
           }

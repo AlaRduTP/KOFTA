@@ -103,7 +103,7 @@ static void find_obj(u8* argv0) {
 
 static void edit_params(u32 argc, char** argv) {
 
-  u8 fortify_set = 0, asan_set = 0, x_set = 0, bit_mode = 0;
+  u8 fortify_set = 0, asan_set = 0, x_set = 0, bit_mode = 0, use_cxx = 0;
   u8 *name;
 
   cc_params = ck_alloc((argc + 128) * sizeof(u8*));
@@ -114,6 +114,7 @@ static void edit_params(u32 argc, char** argv) {
   if (!strcmp(name, "afl-clang-fast++")) {
     u8* alt_cxx = getenv("AFL_CXX");
     cc_params[0] = alt_cxx ? alt_cxx : (u8*)"clang++";
+    use_cxx = 1;
   } else {
     u8* alt_cc = getenv("AFL_CC");
     cc_params[0] = alt_cc ? alt_cc : (u8*)"clang";
@@ -307,11 +308,11 @@ static void edit_params(u32 argc, char** argv) {
   }
 #endif
 
-  cc_params[cc_par_cnt++] = "-fsanitize-coverage=inline-8bit-counters,trace-cmp";
-  cc_params[cc_par_cnt++] = "-fsanitize=undefined";
-  cc_params[cc_par_cnt++] = "-fsanitize-undefined-trap-on-error";
-  // cc_params[cc_par_cnt++] = "-U_FORTIFY_SOURCE";
-  // cc_params[cc_par_cnt++] = "-fsanitize=address";
+  if (!use_cxx) {
+    cc_params[cc_par_cnt++] = "-fsanitize-coverage=inline-8bit-counters,trace-cmp";
+    cc_params[cc_par_cnt++] = "-fsanitize=undefined";
+    cc_params[cc_par_cnt++] = "-fsanitize-undefined-trap-on-error";
+  }
 
   cc_params[cc_par_cnt++] = alloc_printf("%s/kofta-llvm-rt.o", obj_path);
   cc_params[cc_par_cnt] = NULL;
