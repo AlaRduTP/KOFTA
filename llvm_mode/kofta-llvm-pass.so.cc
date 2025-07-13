@@ -84,12 +84,6 @@ namespace {
 
     ConstantInt *ModuleID;
 
-    FunctionCallee FuncModuleCov;
-    FunctionCallee moduleCovProto(Module &M);
-
-    FunctionCallee FuncModuleCovRet;
-    FunctionCallee moduleCovRetProto(Module &M);
-
     FunctionCallee FuncOptAnalysis;
     FunctionCallee optAnalysisProto(Module &M);
 
@@ -102,9 +96,6 @@ namespace {
 
     void parseOpts(CallInst *CI, OptionsMap &options);
     void parseStrcmp(Value *OptString, OptionsMap &options);
-
-    void logRet(Instruction *Inst);
-    void logFunc(Function *F);
 
     void sanitizerCovTraceString(CallInst *CI, Value *Str1, Value *Str2, Value *Len = nullptr);
   };
@@ -130,13 +121,9 @@ bool KOFTAAnalysis::runOnModule(Module &M) {
   kofta_opts.open(kofta_opt_save, std::ios_base::app);
 
   for (Function &F : M) {
-    if (F.hasExactDefinition()) {
-      logFunc(&F);
-    }
     for (BasicBlock &BB : F) {
       for (Instruction &I : BB) {
         if      (isa<CallInst>(&I))   opt_count += extractOptions(&I, kofta_opts);
-        else if (isa<ReturnInst>(&I)) logRet(&I);
       }
     }
   }
@@ -148,26 +135,6 @@ bool KOFTAAnalysis::runOnModule(Module &M) {
 
   // This pass modifies the program.
   return true;
-
-}
-
-FunctionCallee KOFTAAnalysis::moduleCovProto(Module &M) {
-
-  FunctionType *FT =
-      FunctionType::get(VoidTy, { Int16Ty }, false);
-  FunctionCallee FC = M.getOrInsertFunction("__kofta_module_cov", FT);
-
-  return FC;
-
-}
-
-FunctionCallee KOFTAAnalysis::moduleCovRetProto(Module &M) {
-
-  FunctionType *FT =
-      FunctionType::get(VoidTy, { Int16Ty }, false);
-  FunctionCallee FC = M.getOrInsertFunction("__kofta_module_cov_ret", FT);
-
-  return FC;
 
 }
 
@@ -207,9 +174,6 @@ void KOFTAAnalysis::initVars(Module &M) {
   CnstNegOne = ConstantInt::get(Int64Ty, -1);
 
   ModuleID = ConstantInt::get(Int16Ty, R(MAP_SIZE));
-
-  FuncModuleCov = moduleCovProto(M);
-  FuncModuleCovRet = moduleCovRetProto(M);
 
   FuncOptAnalysis = optAnalysisProto(M);
 
@@ -365,21 +329,6 @@ void KOFTAAnalysis::parseStrcmp(Value *OptString, OptionsMap &options) {
   if (!opt_str.empty()) {
     options.addOption(opt_str, 2);
   }
-}
-
-void KOFTAAnalysis::logFunc(Function *F) {
-
-  Instruction *Inst = &F->getEntryBlock().front();
-  IRBuilder<> IRB(Inst);
-  IRB.CreateCall(FuncModuleCov, { ModuleID });
-
-}
-
-void KOFTAAnalysis::logRet(Instruction *Inst) {
-
-  IRBuilder<> IRB(Inst);
-  IRB.CreateCall(FuncModuleCovRet, { ModuleID });
-
 }
 
 void KOFTAAnalysis::sanitizerCovTraceString(CallInst *CI, Value *Str1, Value *Str2, Value *Len) {

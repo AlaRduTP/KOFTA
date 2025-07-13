@@ -268,9 +268,6 @@ struct queue_entry {
   struct queue_entry *next,           /* Next element, if any             */
                      *next_100;       /* 100 elements ahead               */
 
-  u32 mcov_hits;                      /* Number of unique modules hit     */
-  u8  mcov_depth;                     /* Depth of the module stack        */
-
   u8* alname;                         /* Name of the arglist file         */
 
   struct kofta_optana optana;         /* Options runtime analysis         */
@@ -312,7 +309,6 @@ static s32 interesting_32[] = { INTERESTING_8, INTERESTING_16, INTERESTING_32 };
 static s32 kofta_shm_id;
 
 static struct kofta_shm* kofta_shm;
-static struct kofta_mcov* kofta_mcov;
 static struct kofta_args* kofta_args;
 static struct kofta_optana* kofta_optana;
 static struct kofta_tntana* kofta_tntana;
@@ -1336,8 +1332,6 @@ static void minimize_bits(u8* dst, u8* src) {
 static void update_bitmap_score(struct queue_entry* q) {
 
   u32 i;
-  // u64 fav_mcov   = q->mcov_depth * q->mcov_hits;
-  // u64 fav_factor = q->exec_us * q->len / fav_mcov;
   u64 fav_factor = q->exec_us * q->len;
 
   /* For every byte set in trace_bits[], see if there is a previous winner,
@@ -1351,8 +1345,6 @@ static void update_bitmap_score(struct queue_entry* q) {
 
         /* Faster-executing or smaller test cases are favored. */
 
-        // u64 top_mcov = top_rated[i]->mcov_depth * top_rated[i]->mcov_hits;
-        // if (fav_factor > top_rated[i]->exec_us * top_rated[i]->len / top_mcov) continue;
         if (fav_factor > top_rated[i]->exec_us * top_rated[i]->len) continue;
 
         /* Looks like we're going to win. Decrease ref count for the
@@ -2227,7 +2219,6 @@ EXP_ST void init_forkserver(char** argv) {
      Otherwise, try to figure out what went wrong. */
 
   if (rlen == 4) {
-    if (kofta_mcov->trace_bits[0] != 'K') FATAL("Unable to setup KOFTA SHM in the fork server.");
     OKF("All right - fork server is up.");
     return;
   }
@@ -2390,9 +2381,6 @@ static void setup_kofta_shm(void) {
   kofta_shm = shmat(kofta_shm_id, NULL, 0);
   if (kofta_shm == (void *)-1) PFATAL("shmat() failed");
 
-  kofta_mcov = &kofta_shm->module_cov;
-  kofta_mcov->trace_bits[0] = 78;
-
   kofta_args = &kofta_shm->args;
   kofta_optana = &kofta_shm->optana;
 
@@ -2518,26 +2506,6 @@ static void dump_kofta_arglist(u8* alname) {
 
 }
 
-
-/* Calculate max module depth in the latest run. */
-
-static u8 kofta_mcov_depth(void) {
-
-  u32 i;
-  u8  max_depth = 0;
-
-  for (i = 0; i < MAP_SIZE; i++) {
-
-    if (kofta_mcov->trace_bits[i] > max_depth) {
-      max_depth = kofta_mcov->trace_bits[i];
-    }
-
-  }
-
-  return max_depth;
-
-}
-
 /* Execute target application, monitoring for timeouts. Return status
    information. The called program will update trace_bits[]. */
 
@@ -2557,9 +2525,6 @@ static u8 run_target(char** argv, u32 timeout) {
      territory. */
 
   memset(trace_bits, 0, MAP_SIZE);
-  MEM_BARRIER();
-
-  memset(kofta_mcov, 0, sizeof(struct kofta_mcov));
   MEM_BARRIER();
 
   /* If we're running in "dumb" mode, we can't rely on the fork server
@@ -2941,36 +2906,10 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   q->handicap    = handicap;
   q->cal_failed  = 0;
 
-  q->mcov_depth  = kofta_mcov_depth();
-  q->mcov_hits   = kofta_mcov->unique_hits;
-
   memcpy(&q->optana, kofta_optana, sizeof(struct kofta_optana));
 
   total_bitmap_size += q->bitmap_size;
   total_bitmap_entries++;
-
-#ifdef KOFTA_DEBUG
-
-  static u8  kofta_mcov_max_depth = 0;
-  static u32 kofta_mcov_max_hits = 0,
-             kofta_mcov_max_factor = 0;
-  u8 kofta_mcov_debug = 0;
-  if (q->mcov_depth > kofta_mcov_max_depth) {
-    kofta_mcov_debug = 1;
-    kofta_mcov_max_depth = q->mcov_depth;
-  }
-  if (q->mcov_hits > kofta_mcov_max_hits) {
-    kofta_mcov_debug = 1;
-    kofta_mcov_max_hits = q->mcov_hits;
-  }
-  if (q->mcov_depth * q->mcov_hits > kofta_mcov_max_factor) {
-    kofta_mcov_debug = 1;
-    kofta_mcov_max_factor = q->mcov_depth * q->mcov_hits;
-  }
-  if (kofta_mcov_debug)
-    kofta_debug("%u,%u\n", q->mcov_depth, q->mcov_hits);
-
-#endif
 
   update_bitmap_score(q);
 

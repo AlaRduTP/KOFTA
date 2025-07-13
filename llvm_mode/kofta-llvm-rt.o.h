@@ -32,12 +32,6 @@
 typedef u8 arglist[KOFTA_ARGV_SIZE];
 
 
-struct kofta_mcov {
-  u32 unique_hits;
-  u8  trace_bits[MAP_SIZE];
-};
-
-
 struct kofta_args {
   u8  changed;
   u32 memfd;
@@ -70,7 +64,6 @@ struct kofta_tntana {
 
 
 struct kofta_shm {
-  struct kofta_mcov module_cov;
   struct kofta_args args;
   struct kofta_optana optana;
   struct kofta_tntana tntana;

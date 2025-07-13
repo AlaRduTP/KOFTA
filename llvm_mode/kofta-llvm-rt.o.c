@@ -15,14 +15,7 @@
 #include <sys/shm.h>
 
 
-#define MAX_MODULE_DEPTH 255
-
-static u8  module_depth;
-static u16 module_stack[MAX_MODULE_DEPTH + 1][2];
-
-
 static struct kofta_shm* kofta_shm;
-static struct kofta_mcov* kofta_mcov;
 static struct kofta_args* kofta_args;
 static struct kofta_optana* kofta_optana;
 static struct kofta_tntana* kofta_tntana;
@@ -44,9 +37,6 @@ static void __kofta_map_shm(void) {
     u32 shm_id = atoi(id_str);
     kofta_shm = shmat(shm_id, NULL, 0);
     if (kofta_shm == (void *)-1) _exit(1);
-
-    kofta_mcov = &kofta_shm->module_cov;
-    kofta_mcov->trace_bits[0] = 'K';
 
     kofta_args = &kofta_shm->args;
     kofta_optana = &kofta_shm->optana;
@@ -74,53 +64,6 @@ void __kofta_manual_init(void) {
     __kofta_map_shm();
     if (!kofta_shm) return;
     __kofta_init_args();
-  }
-
-}
-
-
-static inline void __kofta_module_cov_reset(void) {
-
-  module_depth = 0;
-  module_stack[module_depth][0] = 0;
-
-}
-
-
-void __kofta_module_cov(u16 cur_module) {
-
-  u16 prev_module = module_stack[module_depth][0];
-
-  if (unlikely(!kofta_shm || module_depth == MAX_MODULE_DEPTH)) return;
-
-  if (prev_module == cur_module) {
-    ++module_stack[module_depth][1];
-    return;
-  }
-
-  module_depth += 1;
-  module_stack[module_depth][0] = cur_module;
-  module_stack[module_depth][1] = 1;
-
-  u8* cur_bits = kofta_mcov->trace_bits + cur_module;
-
-  if (!*cur_bits) {
-    kofta_mcov->unique_hits += 1;
-    *cur_bits = module_depth;
-  }
-  else if (module_depth < *cur_bits) {
-    *cur_bits = module_depth;
-  }
-
-}
-
-
-void __kofta_module_cov_ret(u16 cur_module) {
-
-  if (unlikely(!kofta_shm || module_depth == MAX_MODULE_DEPTH)) return;
-
-  if (!--module_stack[module_depth][1]) {
-    --module_depth;
   }
 
 }
@@ -370,7 +313,6 @@ void __kofta_shm_reset(void) {
 
   srandom(random());
 
-  __kofta_module_cov_reset();
   __kofta_opt_analysis_reset();
   __kofta_taint_analysis_reset();
 
