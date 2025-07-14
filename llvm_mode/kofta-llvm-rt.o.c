@@ -100,11 +100,15 @@ void __kofta_update_opts(void) {
   if (prev_optcnt == kofta_args->optcnt) return;
   prev_optcnt = kofta_args->optcnt;
 
-  (*__argv_ptr)[0] = kofta_arglist[0];
-  for (u32 i = 0; i < kofta_args->optcnt; i++) {
-    (*__argv_ptr)[i + 1] = kofta_arglist[kofta_args->argcnt + i];
+  u32 prefix_cnt = kofta_args->precnt;
+
+  for (u32 i = 0; i < prefix_cnt; i++) {
+    (*__argv_ptr)[i] = kofta_arglist[i];
   }
-  for (u32 i = 1; i < kofta_args->argcnt; i++) {
+  for (u32 i = 0; i < kofta_args->optcnt; i++) {
+    (*__argv_ptr)[i + prefix_cnt] = kofta_arglist[kofta_args->argcnt + i];
+  }
+  for (u32 i = prefix_cnt; i < kofta_args->argcnt; i++) {
     (*__argv_ptr)[i + kofta_args->optcnt] = kofta_arglist[i];
   }
   (*__argv_ptr)[kofta_args->argcnt + kofta_args->optcnt] = NULL;

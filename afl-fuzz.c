@@ -2494,6 +2494,27 @@ static void remove_kofta_arglist(void) {
 }
 
 
+static int detect_prefix_args(u32 argc, char** argv) {
+
+  int found = 0;
+
+  kofta_args->precnt = 1;
+
+  for (u32 i = 1; i < argc; i++) {
+    if (found) {
+      argv[i - 1] = argv[i];
+    }
+    else if (!strcmp(argv[i], "--")) {
+      found = 1;
+      kofta_args->precnt = i;
+    }
+  }
+
+  return argc - found;
+
+}
+
+
 static char** setup_kofta_arglist(u32 argc, char** argv) {
 
   kofta_args->argcnt = argc;
@@ -2525,12 +2546,16 @@ static char** setup_kofta_arglist(u32 argc, char** argv) {
     strncpy(kofta_optlist[i], "--l3e7", KOFTA_ARGV_SIZE);
   }
 
+  const u32 prefix_cnt = kofta_args->precnt;
+
   argv = ck_alloc(sizeof(u8*) * (argc + 1));
-  argv[0] = kofta_arglist[0];
-  for (u32 i = 0; i < KOFTA_OPTCNT_MAX; i++) {
-    argv[i + 1] = kofta_optlist[i];
+  for (u32 i = 0; i < prefix_cnt; i++) {
+    argv[i] = kofta_arglist[i];
   }
-  for (u32 i = 1; i < kofta_args->argcnt; i++) {
+  for (u32 i = 0; i < KOFTA_OPTCNT_MAX; i++) {
+    argv[i + prefix_cnt] = kofta_optlist[i];
+  }
+  for (u32 i = prefix_cnt; i < kofta_args->argcnt; i++) {
     argv[i + KOFTA_OPTCNT_MAX] = kofta_arglist[i];
   }
   argv[argc] = NULL;
@@ -2553,17 +2578,18 @@ static void read_kofta_arglist(u8* alname) {
   s32 fd = open(alname, O_RDONLY);
   if (fd < 0) PFATAL("Unable to open '%s'", alname);
 
-  u8* altemp = mmap(0, kofta_arglist_size + 2, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+  u8* altemp = mmap(0, kofta_arglist_size + 3, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
   if (altemp == MAP_FAILED) PFATAL("Unable to mmap '%s'", queue_cur->alname);
 
   close(fd);
 
-  memcpy(kofta_arglist, altemp + 2, kofta_arglist_size);
+  memcpy(kofta_arglist, altemp + 3, kofta_arglist_size);
 
   kofta_args->argcnt = altemp[0];
-  kofta_args->optcnt = altemp[1];
+  kofta_args->precnt = altemp[1];
+  kofta_args->optcnt = altemp[2];
 
-  munmap(altemp, kofta_arglist_size + 2);
+  munmap(altemp, kofta_arglist_size + 3);
 
 }
 
@@ -2573,6 +2599,7 @@ static void dump_kofta_arglist(u8* alname) {
   s32 fd = open(alname, O_WRONLY | O_CREAT | O_EXCL, 0600);
   if (fd < 0) PFATAL("Unable to create '%s'", alname);
   ck_write(fd, &kofta_args->argcnt, 1, alname);
+  ck_write(fd, &kofta_args->precnt, 1, alname);
   ck_write(fd, &kofta_args->optcnt, 1, alname);
   ck_write(fd, kofta_arglist, kofta_arglist_size, alname);
   close(fd);
@@ -8570,6 +8597,7 @@ int main(int argc, char** argv) {
   u8  *extras_dir = 0;
   u8  mem_limit_given = 0;
   u8  exit_1 = !!getenv("AFL_BENCH_JUST_ONE");
+  int use_argc;
   char** use_argv;
 
   struct timeval tv;
@@ -8879,7 +8907,8 @@ int main(int argc, char** argv) {
   else
     use_argv = argv + optind;
 
-  use_argv = setup_kofta_arglist(argc - optind, use_argv);
+  use_argc = detect_prefix_args(argc - optind, use_argv);
+  use_argv = setup_kofta_arglist(use_argc, use_argv);
   pivot_kofta_args();
 
   perform_dry_run(use_argv);

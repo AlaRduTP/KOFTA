@@ -36,6 +36,7 @@ struct kofta_args {
   u8  changed;
   u32 memfd;
   u32 argcnt;
+  u32 precnt;
   u32 optcnt;
 };
 
