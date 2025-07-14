@@ -4397,14 +4397,16 @@ static void show_stats(void) {
 #ifdef KOFTA_NOFSRV
 
   #define KOFTA_NAME "KOFTA (no-fsrv)"
+  #define KOFTA_NAME_LEN 19
 
 #else
 
   #define KOFTA_NAME "KOFTA"
+  #define KOFTA_NAME_LEN 9
 
 #endif /* !KOFTA_NOFSRV */
 
-  banner_len = (crash_mode ? 24 : 9) + strlen(KOFTA_VERSION) + strlen(use_banner);
+  banner_len = (crash_mode ? 24 : KOFTA_NAME_LEN) + strlen(KOFTA_VERSION) + strlen(use_banner);
   banner_pad = (80 - banner_len) / 2;
   memset(tmp, ' ', banner_pad);
 
@@ -8573,7 +8575,7 @@ int main(int argc, char** argv) {
   struct timeval tv;
   struct timezone tz;
 
-  SAYF(cCYA "afl-fuzz " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
+  SAYF(cCYA "KOFTA " cBRI KOFTA_VERSION cRST " by <me@alardutp.dev>\n");
 
   doc_path = access(DOC_PATH, F_OK) ? "docs" : DOC_PATH;
 
@@ -8826,6 +8828,9 @@ int main(int argc, char** argv) {
 
   if (getenv("AFL_LD_PRELOAD"))
     FATAL("Use AFL_PRELOAD instead of AFL_LD_PRELOAD");
+
+  if (sync_id || dumb_mode || qemu_mode || crash_mode || no_forkserver || in_bitmap)
+    FATAL("Options -S, -M, -n, -Q, -C, AFL_NO_FORKSRV and -B are not supported in kofta mode");
 
   save_cmdline(argc, argv);
 
