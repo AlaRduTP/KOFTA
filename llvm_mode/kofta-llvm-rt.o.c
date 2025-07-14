@@ -120,31 +120,45 @@ static void __kofta_taint_may_set_hint(void* src, u8 type, u32 tntidx) {
 
   if (kofta_tntana->hint_cnt == KOFTA_HINTS_MAX) return;
 
-  u32 hint_idx = kofta_tntana->hint_cnt++;
-  union kofta_tntdat* dest = &kofta_tntana->hints[hint_idx];
+  u32 hint_idx = kofta_tntana->hint_cnt;
 
-  kofta_tntana->types[hint_idx] = type;
+  union kofta_tntdat* dest = &kofta_tntana->hints[hint_idx];
+  u8* dest_type = &kofta_tntana->types[hint_idx];
 
   switch (type) {
 
   case KOFTA_TRACE_CMP: {
 
+    *dest_type = KOFTA_TRACE_CMP;
     dest->num = *(u64*)src;
+    ++kofta_tntana->hint_cnt;
     break;
 
   }
 
   case KOFTA_TRACE_SWT: {
 
-    dest->num = ((u64*)src)[R(((u64*)src)[0]) + 2];
+    u64 n = ((u64*)src)[0];
+
+    for (u64 i = 0; i < n; ++i) {
+      *dest_type = KOFTA_TRACE_SWT;
+      dest->num = ((u64*)src)[i + 2];
+      ++kofta_tntana->hint_cnt;
+      if (kofta_tntana->hint_cnt == KOFTA_HINTS_MAX) break;
+      ++dest;
+      ++dest_type;
+    }
+
     break;
 
   }
 
   case KOFTA_TRACE_STR: {
 
+    *dest_type = KOFTA_TRACE_STR;
     strncpy(dest->str, (u8*)src, KOFTA_ARGV_SIZE - 1);
     dest->str[KOFTA_ARGV_SIZE - 1] = '\0';
+    ++kofta_tntana->hint_cnt;
     break;
 
   }
@@ -334,10 +348,6 @@ __attribute__((constructor(KOFTA_ARGSLEAK_PRIO))) static void __args_leak(void) 
   __argc_ptr = (int *)((unsigned long)__argv_ptr + 0xc);
 
 }
-
-
-/* LLVM SanitizerCoverage - Tracing data flow.
-   See, https://releases.llvm.org/10.0.0/tools/clang/docs/SanitizerCoverage.html#tracing-data-flow */
 
 
 void __sanitizer_cov_trace_const_cmp1(u8 cnst, u8 argv) {
