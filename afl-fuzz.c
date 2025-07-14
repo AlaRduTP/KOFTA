@@ -2078,7 +2078,22 @@ EXP_ST void init_forkserver(char** argv) {
   int status;
   s32 rlen;
 
+#ifdef KOFTA_NOFSRV
+
+  static u8 first_init = 1;
+
+  if (first_init) {
+    first_init = 0;
+
+#endif
+
   ACTF("Spinning up the fork server...");
+
+#ifdef KOFTA_NOFSRV
+
+  }
+
+#endif
 
   if (pipe(st_pipe) || pipe(ctl_pipe)) PFATAL("pipe() failed");
 
@@ -2219,7 +2234,21 @@ EXP_ST void init_forkserver(char** argv) {
      Otherwise, try to figure out what went wrong. */
 
   if (rlen == 4) {
+
+#ifdef KOFTA_NOFSRV
+
+    if (first_init) {
+
+#endif
+
     OKF("All right - fork server is up.");
+
+#ifdef KOFTA_NOFSRV
+
+    }
+
+#endif
+
     return;
   }
 
@@ -2403,10 +2432,49 @@ static inline u8* randpick_kofta_optcandi(u16 optid) {
 
 /* KOFTA Args Setup */
 
-static inline void update_kofta_optlist(u32 optcnt) {
+#ifdef KOFTA_NOFSRV
+
+#define update_kofta_optlist(n) _update_kofta_optlist(n, argv)
+
+static inline void _update_kofta_optlist(u32 optcnt, char** argv)
+
+#else
+
+#define update_kofta_optlist _update_kofta_optlist
+
+static inline void _update_kofta_optlist(u32 optcnt)
+
+#endif /* !KOFTA_NOFSRV */
+
+{
+
+#ifdef KOFTA_NOFSRV
+
+  if (forksrv_pid > 0) {
+    kill(forksrv_pid, SIGKILL);
+    if (waitpid(forksrv_pid, NULL, 0) <= 0)
+      PFATAL("waitpid() failed");
+    forksrv_pid = 0;
+  }
+
+  if (child_pid > 0) {
+    kill(child_pid, SIGKILL);
+    child_pid = 0;
+  }
+
+  close(fsrv_ctl_fd);
+  close(fsrv_st_fd);
+
+#endif /* !KOFTA_NOFSRV */
 
   kofta_args->optcnt = optcnt;
   kofta_args->changed = 1;
+
+#ifdef KOFTA_NOFSRV
+
+  init_forkserver(argv);
+
+#endif /* !KOFTA_NOFSRV */
 
 }
 
@@ -2426,7 +2494,7 @@ static void remove_kofta_arglist(void) {
 }
 
 
-static void setup_kofta_arglist(u32 argc, char** argv) {
+static char** setup_kofta_arglist(u32 argc, char** argv) {
 
   kofta_args->argcnt = argc;
   argc += KOFTA_OPTCNT_MAX;
@@ -2457,20 +2525,25 @@ static void setup_kofta_arglist(u32 argc, char** argv) {
     strncpy(kofta_optlist[i], "--l3e7", KOFTA_ARGV_SIZE);
   }
 
-  char** use_argv = ck_alloc(sizeof(u8*) * (argc + 1));
-  use_argv[0] = kofta_arglist[0];
+  argv = ck_alloc(sizeof(u8*) * (argc + 1));
+  argv[0] = kofta_arglist[0];
   for (u32 i = 0; i < KOFTA_OPTCNT_MAX; i++) {
-    use_argv[i + 1] = kofta_optlist[i];
+    argv[i + 1] = kofta_optlist[i];
   }
   for (u32 i = 1; i < kofta_args->argcnt; i++) {
-    use_argv[i + KOFTA_OPTCNT_MAX] = kofta_arglist[i];
+    argv[i + KOFTA_OPTCNT_MAX] = kofta_arglist[i];
   }
-  use_argv[argc] = NULL;
+  argv[argc] = NULL;
 
   update_kofta_optlist(0);
-  init_forkserver(use_argv);
 
-  ck_free(use_argv);
+#ifndef KOFTA_NOFSRV
+
+  init_forkserver(argv);
+
+#endif /* !KOFTA_NOFSRV */
+
+  return argv;
 
 }
 
@@ -4321,13 +4394,23 @@ static void show_stats(void) {
 
   /* Let's start by drawing a centered banner. */
 
+#ifdef KOFTA_NOFSRV
+
+  #define KOFTA_NAME "KOFTA (no-fsrv)"
+
+#else
+
+  #define KOFTA_NAME "KOFTA"
+
+#endif /* !KOFTA_NOFSRV */
+
   banner_len = (crash_mode ? 24 : 9) + strlen(KOFTA_VERSION) + strlen(use_banner);
   banner_pad = (80 - banner_len) / 2;
   memset(tmp, ' ', banner_pad);
 
   sprintf(tmp + banner_pad, "%s " cLCY KOFTA_VERSION cLGN
           " (%s)",  crash_mode ? cPIN "peruvian were-rabbit" :
-          cYEL "KOFTA", use_banner);
+          cYEL KOFTA_NAME, use_banner);
 
   SAYF("\n%s\n\n", tmp);
 
@@ -8791,7 +8874,7 @@ int main(int argc, char** argv) {
   else
     use_argv = argv + optind;
 
-  setup_kofta_arglist(argc - optind, use_argv);
+  use_argv = setup_kofta_arglist(argc - optind, use_argv);
   pivot_kofta_args();
 
   perform_dry_run(use_argv);
@@ -8914,6 +8997,7 @@ stop_fuzzing:
   destroy_extras();
   ck_free(target_path);
   ck_free(sync_id);
+  ck_free(use_argv);
 
   alloc_report();
 

@@ -40,6 +40,10 @@ ifdef KOFTA_SKIPDOC
   CFLAGS   += -DKOFTA_SKIPDOC
 endif
 
+ifdef KOFTA_NOFSRV
+  CFLAGS   += -DKOFTA_NOFSRV
+endif
+
 ifneq "$(filter Linux GNU%,$(shell uname))" ""
   LDFLAGS  += -ldl
 endif
