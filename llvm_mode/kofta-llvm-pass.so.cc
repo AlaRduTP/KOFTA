@@ -263,12 +263,12 @@ size_t KOFTAAnalysis::extractOptions(Instruction *Inst, std::ofstream &kofta_opt
     parseOpts(CI, options);
   }
   // Check if this call is to 'strcmp'
-  else if (CalledFunc->getName() == "strcmp" || CalledFunc->getName() == "strcasecmp") {
+  else if (CalledFunc->getName().endswith("strcmp") || CalledFunc->getName().endswith("strcasecmp")) {
     parseStrcmp(CI->getArgOperand(0), options);
     parseStrcmp(CI->getArgOperand(1), options);
     sanitizerCovTraceString(CI, CI->getArgOperand(0), CI->getArgOperand(1));
   }
-  else if (CalledFunc->getName() == "strncmp" || CalledFunc->getName() == "strncasecmp" || CalledFunc->getName() == "memcmp") {
+  else if (CalledFunc->getName().endswith("strncmp") || CalledFunc->getName().endswith("strncasecmp") || CalledFunc->getName().endswith("memcmp")) {
     parseStrcmp(CI->getArgOperand(0), options);
     parseStrcmp(CI->getArgOperand(1), options);
     sanitizerCovTraceString(CI, CI->getArgOperand(0), CI->getArgOperand(1), CI->getArgOperand(2));
