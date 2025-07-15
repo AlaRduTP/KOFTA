@@ -4423,15 +4423,31 @@ static void show_stats(void) {
 
 #ifdef KOFTA_NOFSRV
 
-  #define KOFTA_NAME "KOFTA (no-fsrv)"
-  #define KOFTA_NAME_LEN 19
+  #define KOFTA_NOFSRV_NAME " (no-fsrv)"
+  #define KOFTA_NOFSRV_NAME_LEN 10
 
 #else
 
-  #define KOFTA_NAME "KOFTA"
-  #define KOFTA_NAME_LEN 9
+  #define KOFTA_NOFSRV_NAME ""
+  #define KOFTA_NOFSRV_NAME_LEN 0
 
-#endif /* !KOFTA_NOFSRV */
+#endif
+
+#ifdef KOFTA_SKIPDOC
+
+  #define KOFTA_SKIPDOC_NAME " (no-havoc)"
+  #define KOFTA_SKIPDOC_NAME_LEN 11
+
+#else
+
+  #define KOFTA_SKIPDOC_NAME ""
+  #define KOFTA_SKIPDOC_NAME_LEN 0
+
+#endif
+
+#define KOFTA_NAME "KOFTA" KOFTA_NOFSRV_NAME KOFTA_SKIPDOC_NAME
+#define KOFTA_NAME_LEN (9 + KOFTA_NOFSRV_NAME_LEN + KOFTA_SKIPDOC_NAME_LEN)
+
 
   banner_len = (crash_mode ? 24 : KOFTA_NAME_LEN) + strlen(KOFTA_VERSION) + strlen(use_banner);
   banner_pad = (80 - banner_len) / 2;
@@ -5583,22 +5599,35 @@ static u8 fuzz_one(char** argv) {
           case KOFTA_TRACE_CMP:
           case KOFTA_TRACE_SWT:
 
-            if (kofta_tntana->hints[j].num > 31 && kofta_tntana->hints[j].num < 127 && UR(100) < 70)
+            if (kofta_tntana->hints[j].num > 31 && kofta_tntana->hints[j].num < 127) {
               curr_opt[i] = kofta_tntana->hints[j].num;
-            else
-              sprintf(curr_opt + i, "%llu", kofta_tntana->hints[j].num);
+              update_kofta_optlist(kofta_args->optcnt);
+              kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
+              if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+            }
+            sprintf(curr_opt + i, "%llu", kofta_tntana->hints[j].num);
+            update_kofta_optlist(kofta_args->optcnt);
+            kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
+            if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+            sprintf(curr_opt + i, "%llu", kofta_tntana->hints[j].num + 'k');
+            update_kofta_optlist(kofta_args->optcnt);
+            kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
+            if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
+            sprintf(curr_opt + i, "%llu", kofta_tntana->hints[j].num - 'k');
+            update_kofta_optlist(kofta_args->optcnt);
+            kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
+            if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
             break;
 
           case KOFTA_TRACE_STR:
 
             strcpy(curr_opt + i, kofta_tntana->hints[j].str);
+            update_kofta_optlist(kofta_args->optcnt);
+            kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
+            if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
             break;
 
           }
-
-          update_kofta_optlist(kofta_args->optcnt);
-          kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
-          if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
 
           strcpy(curr_opt, orig_opt);
 
