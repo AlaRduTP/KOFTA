@@ -325,6 +325,10 @@ struct kofta_optcandi {
 
 static struct kofta_optcandi kofta_optcandis[MAP_SIZE];
 
+static struct queue_entry* kofta_optbase; /* Base of a valid option combination. */
+static u8* kofta_optbase_mem;             /* Testcase buffer for optbase. */
+static u8  kofta_testexit = 0;            /* Test exit code for a common fuzzing. */
+
 #ifdef KOFTA_DEBUG
 
 #define KOFTA_DEBUG_FILE "KOFTA_DEBUG"
@@ -2619,6 +2623,7 @@ static u8 run_target(char** argv, u32 timeout) {
   u32 tb4;
 
   child_timed_out = 0;
+  kofta_testexit = 1;
 
   /* After this memset, trace_bits[] are effectively volatile, so we
      must prevent any earlier operations from venturing into that
@@ -2760,6 +2765,8 @@ static u8 run_target(char** argv, u32 timeout) {
 
   }
 
+  kofta_testexit = WEXITSTATUS(status);
+
   if (!WIFSTOPPED(status)) child_pid = 0;
 
   getitimer(ITIMER_REAL, &it);
@@ -2880,6 +2887,104 @@ static void write_with_gap(void* mem, u32 len, u32 skip_at, u32 skip_len) {
     lseek(fd, 0, SEEK_SET);
 
   } else close(fd);
+
+}
+
+
+static inline u8 guess_kofta_valreq(u8* opt, struct queue_entry* queue_orig) {
+
+  if (unlikely(!kofta_optbase)) return 0;
+
+  u8  fault,
+      guess = 0;
+
+  read_kofta_arglist(kofta_optbase->alname);
+  u32 optcnt = kofta_args->optcnt;
+
+  strncpy(&kofta_optlist[optcnt][0], opt, KOFTA_ARGV_SIZE);
+  kofta_optlist[optcnt][KOFTA_ARGV_SIZE - 1] = '\0';
+
+  kofta_optlist[optcnt + 1][0] = '0';
+  kofta_optlist[optcnt + 1][1] = '\0';
+
+  update_kofta_optlist(optcnt + 2);
+  kofta_tntana->mode = KOFTA_TNTANA_MODE_SETUP;
+  write_to_testcase(kofta_optbase_mem, kofta_optbase->len);
+  fault = run_target(NULL, exec_tmout);
+
+  if (fault == FAULT_NONE && kofta_testexit == 0) {
+    guess = 1;
+    opt[-2] = '1';
+    goto return_guess;
+  }
+
+  kofta_optlist[optcnt + 1][0] = '1';
+  update_kofta_optlist(optcnt + 2);
+  write_to_testcase(kofta_optbase_mem, kofta_optbase->len);
+  kofta_tntana->mode = KOFTA_TNTANA_MODE_COMPR;
+  fault = run_target(NULL, exec_tmout);
+
+  if (fault == FAULT_NONE && kofta_tntana->mode == KOFTA_TNTANA_MODE_FOUND) {
+
+    kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
+    for (u32 i = 0; i < kofta_tntana->hint_cnt; i++) {
+      switch (kofta_tntana->types[i]) {
+
+      case KOFTA_TRACE_CMP:
+      case KOFTA_TRACE_SWT:
+
+        kofta_testexit = 1;
+        if (kofta_tntana->hints[i].num > 31
+            && kofta_tntana->hints[i].num < 127
+            && kofta_tntana->hints[i].num != '-') {
+          kofta_optlist[optcnt + 1][0] = kofta_tntana->hints[i].num;
+          update_kofta_optlist(kofta_args->optcnt);
+          write_to_testcase(kofta_optbase_mem, kofta_optbase->len);
+          fault = run_target(NULL, exec_tmout);
+        }
+        if (kofta_testexit != 0) {
+          sprintf(&kofta_optlist[optcnt + 1][0], "%llu", kofta_tntana->hints[i].num);
+          update_kofta_optlist(kofta_args->optcnt);
+          write_to_testcase(kofta_optbase_mem, kofta_optbase->len);
+          fault = run_target(NULL, exec_tmout);
+        }
+        break;
+
+      case KOFTA_TRACE_STR:
+
+        if (kofta_tntana->hints[i].str[0] != '\0' && kofta_tntana->hints[i].str[0] != '-') {
+          strcpy(&kofta_optlist[optcnt + 1][0], kofta_tntana->hints[i].str);
+          update_kofta_optlist(kofta_args->optcnt);
+          write_to_testcase(kofta_optbase_mem, kofta_optbase->len);
+          fault = run_target(NULL, exec_tmout);
+        }
+        break;
+
+      }
+      if (fault == FAULT_NONE && kofta_testexit == 0) {
+        guess = 1;
+        opt[-2] = '1';
+        goto return_guess;
+      }
+      kofta_optlist[optcnt + 1][1] = '\0';
+    }
+
+  }
+
+  update_kofta_optlist(optcnt + 1);
+  write_to_testcase(kofta_optbase_mem, kofta_optbase->len);
+  fault = run_target(NULL, exec_tmout);
+
+  if (fault == FAULT_NONE && kofta_testexit == 0) {
+    guess = 0;
+    opt[-2] = '0';
+  }
+
+return_guess:
+  read_kofta_arglist(queue_orig->alname);
+  update_kofta_optlist(kofta_args->optcnt);
+  kofta_tntana->mode = KOFTA_TNTANA_MODE_NOP;
+  return guess;
 
 }
 
@@ -3554,6 +3659,14 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
     }
 
     queue_top->exec_cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
+
+    if (unlikely(!kofta_optbase)) {
+      if (kofta_testexit == 0 && kofta_args->optcnt < KOFTA_OPTCNT_MAX - 1) {
+        kofta_optbase = queue_top;
+        kofta_optbase_mem = ck_alloc_nozero(len);
+        memcpy(kofta_optbase_mem, mem, len);
+      }
+    }
 
     /* Try to calibrate inline; this also calls update_bitmap_score() when
        successful. */
@@ -5805,10 +5918,10 @@ kofta_optshed1_stage:
       u8  valreq = opt[0] - '0';
       opt += 2;
 
-      /* When valrep == 2 means the option value is optional.
-         We make the probability of assigning a value 50%. */
+      /* When valreq == 2 means we dont know if the option value is optional.
+         If we found an optbase, we can make a guess. */
 
-      if (valreq == 2) valreq = UR(100) < 50;
+      if (valreq == 2) valreq = guess_kofta_valreq(opt, queue_cur);
 
       strncpy(&kofta_optlist[kofta_args->optcnt][0], opt, KOFTA_ARGV_SIZE);
       kofta_optlist[kofta_args->optcnt][KOFTA_ARGV_SIZE - 1] = '\0';
@@ -5840,7 +5953,7 @@ kofta_optshed1_stage:
 
   stage_short = "optshed2";
   stage_name  = "optlist replacing";
-  stage_max   = queue_cur->optana.idcnt * 100;
+  stage_max   = queue_cur->optana.idcnt > 10 ? 1000 : queue_cur->optana.idcnt * 100;
 
   optshed = 2;
 
@@ -5911,6 +6024,10 @@ kofta_optshed2_end:
   ck_free(splice_buf);
 
 kofta_optsplice_end:
+
+  /* Skip havoc and splicing until we find a valid option combination. */
+
+  if (!kofta_optbase) goto abandon_entry;
 
   /* Reset the arglist. */
 
@@ -9078,6 +9195,7 @@ stop_fuzzing:
   ck_free(target_path);
   ck_free(sync_id);
   ck_free(use_argv);
+  ck_free(kofta_optbase_mem);
 
   alloc_report();
 
