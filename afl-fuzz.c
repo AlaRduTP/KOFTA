@@ -2891,7 +2891,7 @@ static void write_with_gap(void* mem, u32 len, u32 skip_at, u32 skip_len) {
 }
 
 
-static inline u8 guess_kofta_valreq(u8* opt, struct queue_entry* queue_orig) {
+static inline u8 guess_kofta_valreq(char** argv, u8* opt, struct queue_entry* queue_orig) {
 
   if (unlikely(!kofta_optbase)) return 0;
 
@@ -2910,7 +2910,7 @@ static inline u8 guess_kofta_valreq(u8* opt, struct queue_entry* queue_orig) {
   update_kofta_optlist(optcnt + 2);
   kofta_tntana->mode = KOFTA_TNTANA_MODE_SETUP;
   write_to_testcase(kofta_optbase_mem, kofta_optbase->len);
-  fault = run_target(NULL, exec_tmout);
+  fault = run_target(argv, exec_tmout);
 
   if (fault == FAULT_NONE && kofta_testexit == 0) {
     guess = 1;
@@ -2922,7 +2922,7 @@ static inline u8 guess_kofta_valreq(u8* opt, struct queue_entry* queue_orig) {
   update_kofta_optlist(optcnt + 2);
   write_to_testcase(kofta_optbase_mem, kofta_optbase->len);
   kofta_tntana->mode = KOFTA_TNTANA_MODE_COMPR;
-  fault = run_target(NULL, exec_tmout);
+  fault = run_target(argv, exec_tmout);
 
   if (fault == FAULT_NONE && kofta_tntana->mode == KOFTA_TNTANA_MODE_FOUND) {
 
@@ -2940,13 +2940,13 @@ static inline u8 guess_kofta_valreq(u8* opt, struct queue_entry* queue_orig) {
           kofta_optlist[optcnt + 1][0] = kofta_tntana->hints[i].num;
           update_kofta_optlist(kofta_args->optcnt);
           write_to_testcase(kofta_optbase_mem, kofta_optbase->len);
-          fault = run_target(NULL, exec_tmout);
+          fault = run_target(argv, exec_tmout);
         }
         if (kofta_testexit != 0) {
           sprintf(&kofta_optlist[optcnt + 1][0], "%llu", kofta_tntana->hints[i].num);
           update_kofta_optlist(kofta_args->optcnt);
           write_to_testcase(kofta_optbase_mem, kofta_optbase->len);
-          fault = run_target(NULL, exec_tmout);
+          fault = run_target(argv, exec_tmout);
         }
         break;
 
@@ -2956,7 +2956,7 @@ static inline u8 guess_kofta_valreq(u8* opt, struct queue_entry* queue_orig) {
           strcpy(&kofta_optlist[optcnt + 1][0], kofta_tntana->hints[i].str);
           update_kofta_optlist(kofta_args->optcnt);
           write_to_testcase(kofta_optbase_mem, kofta_optbase->len);
-          fault = run_target(NULL, exec_tmout);
+          fault = run_target(argv, exec_tmout);
         }
         break;
 
@@ -2973,7 +2973,7 @@ static inline u8 guess_kofta_valreq(u8* opt, struct queue_entry* queue_orig) {
 
   update_kofta_optlist(optcnt + 1);
   write_to_testcase(kofta_optbase_mem, kofta_optbase->len);
-  fault = run_target(NULL, exec_tmout);
+  fault = run_target(argv, exec_tmout);
 
   if (fault == FAULT_NONE && kofta_testexit == 0) {
     guess = 0;
@@ -5921,7 +5921,7 @@ kofta_optshed1_stage:
       /* When valreq == 2 means we dont know if the option value is optional.
          If we found an optbase, we can make a guess. */
 
-      if (valreq == 2) valreq = guess_kofta_valreq(opt, queue_cur);
+      if (valreq == 2) valreq = guess_kofta_valreq(argv, opt, queue_cur);
 
       strncpy(&kofta_optlist[kofta_args->optcnt][0], opt, KOFTA_ARGV_SIZE);
       kofta_optlist[kofta_args->optcnt][KOFTA_ARGV_SIZE - 1] = '\0';
