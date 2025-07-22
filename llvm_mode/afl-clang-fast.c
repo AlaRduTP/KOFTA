@@ -355,7 +355,10 @@ int main(int argc, char** argv) {
 
   edit_params(argc, argv);
 
-  execvp(cc_params[0], (char**)cc_params);
+  if (getenv("KOFTA_MESON"))
+    execvp(cc_params[0], (char**)argv);
+  else
+    execvp(cc_params[0], (char**)cc_params);
 
   FATAL("Oops, failed to execute '%s' - check your PATH", cc_params[0]);
 
