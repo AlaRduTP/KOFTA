@@ -2459,15 +2459,14 @@ static inline void _update_kofta_optlist(u32 optcnt)
     if (waitpid(forksrv_pid, NULL, 0) <= 0)
       PFATAL("waitpid() failed");
     forksrv_pid = 0;
+    close(fsrv_ctl_fd);
+    close(fsrv_st_fd);
   }
 
   if (child_pid > 0) {
     kill(child_pid, SIGKILL);
     child_pid = 0;
   }
-
-  close(fsrv_ctl_fd);
-  close(fsrv_st_fd);
 
 #endif /* !KOFTA_NOFSRV */
 
