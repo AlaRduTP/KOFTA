@@ -1,16 +1,20 @@
 #!python3
 # -*- coding: utf-8 -*-
 
-from pathlib import Path
-
 import argparse
 import csv
+
+from pathlib import Path
+
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 
-def plot(plot_data: dict[str, dict[str, list[int]]], output: Path | None) -> None:
+from debug import pok, pwarn, phello
+
+
+def plot(plot_data: dict[str, dict[str, list[int]]], title: str | None, output: Path | None) -> None:
 
     for name, data in plot_data.items():
         color = plt.plot(data["time"], data["paths"], label=name)[-1].get_color()
@@ -20,6 +24,9 @@ def plot(plot_data: dict[str, dict[str, list[int]]], output: Path | None) -> Non
     plt.xlabel("Time (seconds)")
     plt.ylabel("Paths found")
     plt.legend()
+
+    if title:
+        plt.title(title)
 
     if output:
         plt.savefig(output, bbox_inches='tight')
@@ -73,6 +80,8 @@ def read_group_data(group: Path, time: int | None, sample: int) -> tuple[str | N
     if not plot_data:
         return None, {}
 
+    pok(f"Grp: {group.name}:", [data["paths"][-1] for data in plot_data.values()])
+
     min_size = min(len(data["time"]) for data in plot_data.values())
     for data in plot_data.values():
         data["time"] = data["time"][:min_size]
@@ -95,6 +104,10 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("-d", "--dir",    metavar="STATE_DIR",   type=Path, dest="dirs",   action="append", help="a directory containing AFL state data")
     parser.add_argument("-g", "--group",  metavar="STATE_GROUP", type=Path, dest="groups", action="append", help="a group containing multiple AFL states")
+
+    parser.add_argument("-l", "--labels", metavar="LABEL_LIST",                                             help="comma-separated list of labels to replace in the plot (e.g., 'd1,d2,.,g2')")
+    parser.add_argument(      "--title",  metavar="TITLE",                                                  help="title of the plot")
+
     parser.add_argument("-t", "--time",   metavar="SECOND",      type=int,                                  help="time in seconds to plot")
     parser.add_argument("-s", "--sample", metavar="SECOND",      type=int,  default=5,                      help="sample time in seconds")
 
@@ -105,15 +118,27 @@ def parse_args() -> argparse.Namespace:
 
 def main():
 
+    phello("kofta-plot")
+
     args = parse_args()
 
     groups: list[Path] = args.groups if args.groups else []
     dirs: list[Path] = args.dirs if args.dirs else []
 
+    labels: list[str | None] = args.labels.split(",") if args.labels else []
+    title: str | None = args.title
+
     time: int | None = args.time
     sample: int = args.sample
 
     output: Path | None = args.output
+
+    nplot = len(dirs) + len(groups)
+    if len(labels) < nplot:
+        labels += [None] * (nplot - len(labels))
+    elif len(labels) > nplot:
+        labels = labels[:nplot]
+    lidx = 0
 
     plot_data: dict[str, dict[str, list[int]]] = {}
 
@@ -121,15 +146,22 @@ def main():
         name, data = read_plot_data(dir, time, sample)
         if name is None:
             continue
+        pok(f"Dir: {dir.name}: {data['paths'][-1]}")
+        if labels[lidx] is not None and labels[lidx] != '.':
+            name = labels[lidx]
+        lidx += 1
         plot_data[name] = data
 
     for group in groups:
         name, data = read_group_data(group, time, sample)
         if name is None:
             continue
+        if labels[lidx] is not None and labels[lidx] != '.':
+            name = labels[lidx]
+        lidx += 1
         plot_data[name] = data
 
-    plot(plot_data, output)
+    plot(plot_data, title, output)
 
 
 if __name__ == "__main__":

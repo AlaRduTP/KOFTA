@@ -24,3 +24,5 @@ afl-llvm-rt.o
 kofta-fuzz
 kofta-llvm-pass.so
 kofta-llvm-rt.o
+
+__pycache__

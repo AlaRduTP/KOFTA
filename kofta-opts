@@ -1,64 +1,20 @@
 #!python3
 # -*- coding: utf-8 -*-
 
+import argparse
+import csv
+import xml.etree.ElementTree as ET
+
 from pathlib import Path
 from pprint import pprint
 
 
-import argparse
-import csv
-import sys
-import xml.etree.ElementTree as ET
+import debug
+
+from debug import psay, pact, pok, pwarn, pfatal, phello
 
 
 KOFTA_ARGV_SIZE = 128
-KOFTA_VERSION = "0.10"
-
-CBLK = "\x1b[0;30m"
-CRED = "\x1b[0;31m"
-CGRN = "\x1b[0;32m"
-CBRN = "\x1b[0;33m"
-CBLU = "\x1b[0;34m"
-CMGN = "\x1b[0;35m"
-CCYA = "\x1b[0;36m"
-CLGR = "\x1b[0;37m"
-CGRA = "\x1b[1;90m"
-CLRD = "\x1b[1;91m"
-CLGN = "\x1b[1;92m"
-CYEL = "\x1b[1;93m"
-CLBL = "\x1b[1;94m"
-CPIN = "\x1b[1;95m"
-CLCY = "\x1b[1;96m"
-CBRI = "\x1b[1;97m"
-CRST = "\x1b[0m"
-
-
-quiet: int = False
-
-
-def psay(msg: str, /, *args, **kwargs) -> None:
-    print(msg, file=sys.stderr, *args, **kwargs)
-
-
-def pwarn(msg: str, /, *args, **kwargs) -> None:
-    if quiet < 2:
-        psay(f"{CYEL}[!] {CBRI}WARNING: {CRST}{msg}", *args, **kwargs)
-
-
-def pact(msg: str, /, *args, **kwargs) -> None:
-    if quiet < 3:
-        psay(f"{CGRN}[*] {CRST}{msg}", *args, **kwargs)
-
-
-def pok(msg: str, /, *args, **kwargs) -> None:
-    if quiet < 3:
-        psay(f"{CGRN}[+] {CRST}{msg}", *args, **kwargs)
-
-
-def pfatal(msg: str, /, *args, **kwargs) -> None:
-    if quiet < 4:
-        psay(f"{CRED}[-] {CBRI}PROGRAM ABORT: {CRST}{msg}", *args, **kwargs)
-    sys.exit(1)
 
 
 def get_files(dir: Path) -> list[Path]:
@@ -179,9 +135,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main():
-    global quiet
 
-    print(f"{CCYA}kofta-opts {CBRI}{KOFTA_VERSION}{CRST} by <me@alardutp.dev>\n")
+    phello("kofta-opts")
 
     args = parse_args()
 
@@ -192,7 +147,7 @@ def main():
     xml_output: bool = args.xml
 
     prune: bool = args.prune
-    quiet = args.quiet
+    debug.quiet = args.quiet
 
     outdir: Path = args.outdir if args.outdir else Path.cwd()
 
@@ -212,8 +167,10 @@ def main():
     if not options:
         pfatal("No options found!")
 
-    if not quiet:
+    if not debug.quiet:
         pprint(options)
+        argcnt = sum(len(v) for v in options.values())
+        pok(f"Found {argcnt} optional arguments.")
 
     if csv_output:
         save_csv(options, outdir)
